@@ -128,6 +128,15 @@
     </section>
 
     <section class="panel">
+      <h2>回音延遲校準</h2>
+      <div class="mini" style="margin-bottom:8px">校準會播放掃頻音並錄音，估計喇叭→麥克風延遲。進行時請保持安靜。</div>
+      <div class="row">
+        <button id="btn-calibrate">開始校準</button>
+        <span class="mini" id="calibrate-result"></span>
+      </div>
+    </section>
+
+    <section class="panel">
       <h2>記憶</h2>
       <div class="row">
         <span class="mini" id="mem-count">—</span>
@@ -232,6 +241,10 @@ function handleEvent(evt) {
     case "resumed":
       $("btn-listen").textContent = "暫停聆聽";
       banner("已恢復聆聽");
+      break;
+    case "calibration":
+      $("calibrate-result").textContent = evt.message || "";
+      banner(evt.message || "校準完成", "info", 8000);
       break;
     case "ping":
       break;
@@ -407,6 +420,14 @@ $("btn-mem-clear").onclick = async () => {
   if (!confirm("確定清除所有對話記憶？")) return;
   const res = await post("/api/action", { action: "clear_memory" });
   if (res.ok) { $("mem-count").textContent = "0 則訊息"; $("memlist").innerHTML = ""; }
+};
+
+$("btn-calibrate").onclick = async () => {
+  $("calibrate-result").textContent = "校準中（約 6 秒）…";
+  $("btn-calibrate").disabled = true;
+  const res = await post("/api/action", { action: "calibrate_aec" });
+  if (!res.ok) { $("calibrate-result").textContent = res.reason || "校準失敗"; }
+  setTimeout(() => { $("btn-calibrate").disabled = false; }, 10000);
 };
 
 async function init() {

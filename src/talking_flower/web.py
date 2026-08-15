@@ -180,6 +180,9 @@ class WebServer:
             if name == "restart_cosyvoice":
                 asyncio.create_task(self._restart_cosyvoice())
                 return {"ok": True}
+            if name == "calibrate_aec":
+                asyncio.create_task(self._run_aec_calibration())
+                return {"ok": True}
             return JSONResponse({"ok": False, "reason": f"未知動作：{name}"}, status_code=400)
 
         @app.get("/api/memory")
@@ -259,6 +262,53 @@ class WebServer:
             path.write_text(text, encoding="utf-8")
             await self._reload_cosyvoice_style()
             return {"ok": True}
+
+    async def _run_aec_calibration(self) -> None:
+        store = self.ctx.store
+        script = store.project_root / "tools" / "calibrate_aec.py"
+        self.ctx.bus.publish(
+            {"type": "log", "message": "AEC 校準開始：會播放 3.5 秒掃頻音，請保持安靜…"}
+        )
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    sys.executable,
+                    str(script),
+                    "--in-device",
+                    str(store.value("audio.input_device")),
+                    "--in-hostapi",
+                    str(store.value("audio.input_hostapi")),
+                    "--out-device",
+                    str(store.value("audio.output_device")),
+                    "--out-hostapi",
+                    str(store.value("audio.output_hostapi")),
+                ],
+                cwd=str(store.project_root),
+                capture_output=True,
+                timeout=60,
+            )
+        except Exception as error:
+            LOGGER.exception("AEC 校準失敗")
+            self.ctx.bus.publish({"type": "log", "message": f"AEC 校準失敗：{error}"})
+            return
+        delay_ms: int | None = None
+        for line in proc.stdout.decode("utf-8", errors="replace").splitlines():
+            if line.startswith("delay_ms="):
+                delay_ms = int(line.split("=", 1)[1])
+                break
+        if delay_ms is None:
+            detail = proc.stderr.decode("utf-8", errors="replace").strip().splitlines()
+            self.ctx.bus.publish(
+                {"type": "log", "message": f"AEC 校準失敗：{detail[-1] if detail else '未知原因'}"}
+            )
+            return
+        store.set("aec.delay_ms", delay_ms)
+        if self.ctx.controller is not None:
+            self.ctx.controller.apply_live("aec.delay_ms", delay_ms)
+        self.ctx.bus.publish(
+            {"type": "calibration", "delay_ms": delay_ms, "message": f"AEC 延遲已設為 {delay_ms} ms"}
+        )
 
     async def _run_test_tts(self, text: str) -> None:
         controller = self.ctx.controller
