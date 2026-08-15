@@ -93,7 +93,7 @@ class _PcmPlayer:
         self.device = device
         self.volume = volume
         self.aec = aec
-        self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=12)
+        self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=24)
         self._error: BaseException | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -107,15 +107,29 @@ class _PcmPlayer:
         try:
             pending = b""
             frame_bytes = self.aec.frame_size * 2
+            # 佇列暫時沒有音訊時，每次餵 50 ms 的靜音框，讓裝置緩衝維持滿水位，
+            # 避免 WASAPI underflow 在句子之間與分塊之間爆音。
+            silence_burst = max(1, int(0.05 * self.sample_rate / self.aec.frame_size))
+            silence_frame = b"\x00" * frame_bytes
+            silence_ref = np.zeros(self.aec.frame_size, dtype=np.float32)
             with sd.RawOutputStream(
                 device=self.device,
                 samplerate=self.sample_rate,
                 channels=1,
                 dtype="int16",
-                latency="low",
+                latency="high",
             ) as stream:
                 while True:
-                    chunk = self._queue.get()
+                    try:
+                        chunk = self._queue.get(timeout=0.05)
+                    except queue.Empty:
+                        for _ in range(silence_burst):
+                            if self._stop.is_set():
+                                return
+                            if self.aec.enabled:
+                                self.aec.process_render(silence_ref)
+                            stream.write(silence_frame)
+                        continue
                     if chunk is None:
                         break
                     pending += chunk
@@ -220,6 +234,10 @@ class HttpPcmTTS:
             return
 
         owned: _PcmPlayer | None = None
+        # CosyVoice stream=True 的分塊接縫相位不連續（每個 chunk 開頭能量歸零），
+        # 直接接起來會聽到規律的爆音；保留上一段尾部與下一段頭部做 20 ms 交叉淡化。
+        blend_samples = 480
+        blend_carry: np.ndarray | None = None
         try:
             request_text = self._converter.convert(text) if self._converter is not None else text
             async with self._client.stream(
@@ -238,11 +256,34 @@ class HttpPcmTTS:
                     player = _PcmPlayer(sample_rate, self._device, self.config.volume, self.aec)
                     owned = player
                 received = 0
+
+                async def write_samples(samples: np.ndarray) -> None:
+                    nonlocal received
+                    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                    received += len(pcm)
+                    await player.write(pcm)
+
                 async for chunk in response.aiter_bytes():
                     aligned = len(chunk) - len(chunk) % 2
-                    if aligned:
-                        received += aligned
-                        await player.write(chunk[:aligned])
+                    if not aligned:
+                        continue
+                    samples = np.frombuffer(chunk[:aligned], dtype="<i2").astype(np.float32) / 32768.0
+                    if blend_carry is not None:
+                        if len(samples) >= blend_samples:
+                            ramp = np.linspace(0.0, 1.0, blend_samples, dtype=np.float32)
+                            samples[:blend_samples] = (
+                                samples[:blend_samples] * ramp + blend_carry * (1.0 - ramp)
+                            )
+                            blend_carry = None
+                        else:
+                            samples = np.concatenate([blend_carry, samples])
+                            blend_carry = None
+                    if len(samples) > blend_samples:
+                        blend_carry = samples[-blend_samples:].copy()
+                        samples = samples[:-blend_samples]
+                    await write_samples(samples)
+                if blend_carry is not None:
+                    await write_samples(blend_carry)
                 if received == 0:
                     raise RuntimeError("TTS 沒有回傳任何音訊")
         except asyncio.CancelledError:
