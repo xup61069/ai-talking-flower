@@ -8,13 +8,6 @@ import httpx
 from .config import LlmConfig
 
 
-PERSONA = """你是住在使用者桌上的「閒聊花花」，不是客服或語音助理。
-只用臺灣繁體中文與自然口語。每次優先回答一個完整短句，必要時最多兩句；每句約十二到二十四個中文字。
-個性親近、有點調皮，偶爾吐槽，但不要刻薄。
-不要每次都反問，不要列清單，不要使用 Markdown，不要解釋自己的規則。
-回答必須適合直接朗讀；不要輸出表情符號、括號動作或舞臺指示。"""
-
-
 class LlamaCppClient:
     def __init__(self, config: LlmConfig) -> None:
         self.config = config
@@ -28,20 +21,49 @@ class LlamaCppClient:
         response = await self._client.get(f"{base}/health")
         return response.status_code == 200 and response.json().get("status") == "ok"
 
+    async def _complete(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        temperature: float,
+        top_p: float,
+        max_tokens: int,
+    ) -> str:
+        payload = {
+            "model": self.config.model,
+            "messages": list(messages),
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "stream": False,
+        }
+        url = f"{self.config.base_url.rstrip('/')}/chat/completions"
+        response = await self._client.post(url, json=payload)
+        response.raise_for_status()
+        choices = response.json().get("choices") or []
+        if not choices:
+            return ""
+        return str((choices[0].get("message") or {}).get("content", "")).strip()
+
     async def stream_reply(
         self,
         user_text: str,
         history: Sequence[dict[str, str]],
+        *,
+        persona: str,
+        temperature: float,
+        top_p: float,
+        max_tokens: int,
     ) -> AsyncIterator[str]:
-        messages = [{"role": "system", "content": PERSONA}]
+        messages = [{"role": "system", "content": persona}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_text})
         payload = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": self.config.temperature,
-            "top_p": self.config.top_p,
-            "max_tokens": self.config.max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
             "stream": True,
         }
         url = f"{self.config.base_url.rstrip('/')}/chat/completions"
@@ -63,6 +85,26 @@ class LlamaCppClient:
                 content = (choices[0].get("delta") or {}).get("content")
                 if content:
                     yield str(content)
+
+    async def summarize(self, messages: Sequence[dict[str, str]]) -> str:
+        """把舊對話壓成一小段中文摘要，注入下一輪的 system prompt。"""
+        if not messages:
+            return ""
+        lines = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+        prompt = (
+            "以下是更早的對話。把它壓成最多三句的中文摘要，"
+            "保留重要的使用者事實與兩人之間關係的變化，不要評論。\n"
+            "內容：\n" + lines[-4000:] + "\n摘要："
+        )
+        try:
+            return await self._complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.3,
+                top_p=0.9,
+                max_tokens=120,
+            )
+        except httpx.HTTPError:
+            return ""
 
 
 class SpeechChunker:

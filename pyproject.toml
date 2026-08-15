@@ -25,6 +25,10 @@ vad = [
 windows = [
   "pywin32>=311",
 ]
+ui = [
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.30,<1",
+]
 
 [project.scripts]
 talking-flower = "talking_flower.main:main"

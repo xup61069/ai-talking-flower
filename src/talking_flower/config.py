@@ -54,6 +54,13 @@ class InteractionConfig:
 
 
 @dataclass(frozen=True)
+class IdleChatConfig:
+    enabled: bool
+    timeout_s: float
+    prompt: str
+
+
+@dataclass(frozen=True)
 class AsrConfig:
     backend: str
     model: str
@@ -72,6 +79,7 @@ class LlmConfig:
     max_tokens: int
     timeout_s: float
     recent_turns: int
+    persona: str = ""
 
 
 @dataclass(frozen=True)
@@ -93,18 +101,14 @@ class Config:
     audio: AudioConfig
     aec: AecConfig
     interaction: InteractionConfig
+    idle_chat: IdleChatConfig
     vad: VadConfig
     asr: AsrConfig
     llm: LlmConfig
     tts: TtsConfig
 
 
-def load_config(path: str | Path) -> Config:
-    config_path = Path(path).resolve()
-    with config_path.open("rb") as handle:
-        raw = tomllib.load(handle)
-
-    project_root = config_path.parent
+def config_from_raw(project_root: Path, raw: dict) -> Config:
     app_raw = raw["app"]
     database = Path(app_raw["database"])
     if not database.is_absolute():
@@ -121,6 +125,7 @@ def load_config(path: str | Path) -> Config:
         audio=AudioConfig(**raw["audio"]),
         aec=AecConfig(**raw["aec"]),
         interaction=InteractionConfig(**raw["interaction"]),
+        idle_chat=IdleChatConfig(**raw["idle_chat"]),
         vad=VadConfig(**raw["vad"]),
         asr=AsrConfig(
             **{key: value for key, value in raw["asr"].items() if key != "chunk_size"},
@@ -129,3 +134,10 @@ def load_config(path: str | Path) -> Config:
         llm=LlmConfig(**raw["llm"]),
         tts=TtsConfig(**raw["tts"]),
     )
+
+
+def load_config(path: str | Path) -> Config:
+    config_path = Path(path).resolve()
+    with config_path.open("rb") as handle:
+        raw = tomllib.load(handle)
+    return config_from_raw(config_path.parent, raw)

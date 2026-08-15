@@ -5,17 +5,23 @@ import asyncio
 import logging
 from pathlib import Path
 import sys
+import webbrowser
 
 import numpy as np
 
 from .aec import create_echo_canceller
 from .asr import create_recognizer
 from .audio import list_audio_devices, resolve_device
+from .bus import RestartRequired, RuntimeControl, StatusBus
 from .config import Config, load_config
 from .controller import FlowerController
 from .llm import LlamaCppClient
 from .memory import ConversationMemory
+from .settings import LiveSettings, SettingsStore
 from .tts import create_tts
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -26,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--text", help="略過麥克風，直接測試一輪文字對話")
     parser.add_argument("--no-speak", action="store_true", help="文字測試時不要朗讀")
     parser.add_argument("--load-asr", action="store_true", help="搭配 --check 載入 ASR 模型")
+    parser.add_argument("--no-web", action="store_true", help="不要啟動網頁控制台")
+    parser.add_argument("--host", default="127.0.0.1", help="網頁控制台監聽位址")
+    parser.add_argument("--port", type=int, default=7860, help="網頁控制台埠號")
     return parser
 
 
@@ -37,7 +46,13 @@ def configure_logging(level: str) -> None:
     )
 
 
-def build_controller(config: Config) -> tuple[FlowerController, LlamaCppClient, ConversationMemory]:
+def build_controller(
+    config: Config,
+    *,
+    live: LiveSettings | None = None,
+    bus: StatusBus | None = None,
+    runtime: RuntimeControl | None = None,
+) -> tuple[FlowerController, LlamaCppClient, ConversationMemory]:
     llm = LlamaCppClient(config.llm)
     memory = ConversationMemory(config.app.database)
     aec = create_echo_canceller(
@@ -49,9 +64,12 @@ def build_controller(config: Config) -> tuple[FlowerController, LlamaCppClient, 
         config=config,
         asr=create_recognizer(config.asr),
         llm=llm,
-        tts=create_tts(config.tts, config.audio, aec),
+        tts=create_tts(config.tts, config.audio, aec, live),
         memory=memory,
         aec=aec,
+        live=live,
+        bus=bus,
+        runtime=runtime,
     )
     return controller, llm, memory
 
@@ -77,7 +95,10 @@ async def check(config: Config, *, load_asr: bool) -> int:
         tts_healthy = await tts.health()
     finally:
         await tts.close()
-    print(f"CosyVoice：{'OK' if tts_healthy else '無法連線'}")
+    label = {"kokoro": "Kokoro", "cosyvoice": "CosyVoice", "windows_sapi": "Windows SAPI"}.get(
+        config.tts.backend, config.tts.backend
+    )
+    print(f"{label}：{'OK' if tts_healthy else '無法連線'}")
     if not tts_healthy:
         return 1
     aec = create_echo_canceller(config.aec, config.audio.sample_rate, config.project_root)
@@ -97,24 +118,69 @@ async def check(config: Config, *, load_asr: bool) -> int:
     return 0
 
 
-async def run(args: argparse.Namespace, config: Config) -> int:
+async def run(args: argparse.Namespace, config_path: Path) -> int:
     if args.check:
-        return await check(config, load_asr=args.load_asr)
+        store = SettingsStore(config_path)
+        return await check(store.load_config(), load_asr=args.load_asr)
 
-    controller, llm, memory = build_controller(config)
+    store = SettingsStore(config_path)
+    live = LiveSettings(store)
+    bus = StatusBus()
+    runtime = RuntimeControl()
+
+    ctx = None
+    web_task: asyncio.Task[None] | None = None
+    if not args.no_web and args.text is None:
+        from .web import AppContext, WebServer, install_bus_log_handler
+
+        ctx = AppContext(store=store, live=live, bus=bus, runtime=runtime)
+        install_bus_log_handler(bus)
+        server = WebServer(ctx)
+        bus.attach_loop(asyncio.get_running_loop())
+        web_task = asyncio.create_task(server.serve(host=args.host, port=args.port))
+        asyncio.create_task(_open_browser_after(args.host, args.port, 1.0))
+
     try:
-        if args.text is not None:
-            print(f"{config.app.name}：", end="", flush=True)
-            await controller.text_turn(args.text, speak=not args.no_speak)
-        else:
-            print("花花已啟動。按 Ctrl+C 停止。")
-            await controller.run()
+        while True:
+            controller, llm, memory = build_controller(
+                store.load_config(),
+                live=live,
+                bus=bus,
+                runtime=runtime,
+            )
+            if ctx is not None:
+                ctx.controller, ctx.llm, ctx.memory = controller, llm, memory
+            try:
+                if args.text is not None:
+                    print(f"{controller.config.app.name}：", end="", flush=True)
+                    await controller.text_turn(args.text, speak=not args.no_speak)
+                    return 0
+                print("花花已啟動。網頁控制台：", f"http://{args.host}:{args.port}")
+                await controller.run()
+                return 0
+            except RestartRequired:
+                LOGGER.info("以新設定重建管線")
+                continue
+            finally:
+                await llm.close()
+                await controller.tts.close()
+                controller.aec.close()
+                memory.close()
     finally:
-        await llm.close()
-        await controller.tts.close()
-        controller.aec.close()
-        memory.close()
-    return 0
+        if web_task is not None:
+            web_task.cancel()
+            try:
+                await web_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+async def _open_browser_after(host: str, port: int, delay: float) -> None:
+    await asyncio.sleep(delay)
+    try:
+        webbrowser.open(f"http://{host}:{port}")
+    except Exception:
+        pass
 
 
 def main() -> None:
@@ -134,7 +200,7 @@ def main() -> None:
     config = load_config(config_path)
     configure_logging(config.app.log_level)
     try:
-        raise SystemExit(asyncio.run(run(args, config)))
+        raise SystemExit(asyncio.run(run(args, config_path)))
     except KeyboardInterrupt:
         print("\n花花已停止。")
         raise SystemExit(130) from None

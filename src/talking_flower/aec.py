@@ -22,6 +22,7 @@ class EchoCanceller(Protocol):
 
     def process_render(self, frame: np.ndarray) -> None: ...
     def process_capture(self, frame: np.ndarray) -> np.ndarray: ...
+    def set_delay_ms(self, delay_ms: int) -> None: ...
     def close(self) -> None: ...
 
 
@@ -37,6 +38,9 @@ class BypassEchoCanceller:
 
     def process_capture(self, frame: np.ndarray) -> np.ndarray:
         return frame
+
+    def set_delay_ms(self, delay_ms: int) -> None:
+        return
 
     def close(self) -> None:
         return
@@ -182,6 +186,11 @@ class WebRtcAec3:
                 )
                 processed.append(output)
         return np.concatenate(processed) if processed else np.empty(0, dtype=np.float32)
+
+    def set_delay_ms(self, delay_ms: int) -> None:
+        with self._lock:
+            self._dll.webrtc_apm_set_stream_delay_ms(self._apm, int(delay_ms))
+        LOGGER.info("WebRTC AEC3 延遲更新為 %d ms", delay_ms)
 
     def close(self) -> None:
         if self._closed:

@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 from enum import Enum
 import logging
+import time
 
 from .aec import EchoCanceller
 from .asr import SpeechRecognizer
 from .audio import AudioInput, BlockResampler
+from .bus import RestartRequired, RuntimeControl, StatusBus
 from .config import Config
 from .llm import LlamaCppClient, SpeechChunker
 from .memory import ConversationMemory
+from .settings import LiveSettings
 from .tts import TextToSpeech
 from .vad import UtteranceSegmenter
 
@@ -34,6 +37,9 @@ class FlowerController:
         tts: TextToSpeech,
         memory: ConversationMemory,
         aec: EchoCanceller,
+        live: LiveSettings | None = None,
+        bus: StatusBus | None = None,
+        runtime: RuntimeControl | None = None,
     ) -> None:
         self.config = config
         self.asr = asr
@@ -41,13 +47,45 @@ class FlowerController:
         self.tts = tts
         self.memory = memory
         self.aec = aec
+        self.live = live
+        self.bus = bus
+        self.runtime = runtime
         self.state = State.IDLE
         self._turn_task: asyncio.Task[None] | None = None
+        self._last_activity = time.monotonic()
+        self._summary_cache = ""
+        self._summary_count = 0
+        self._frame_count = 0
 
     def _set_state(self, state: State) -> None:
         if state != self.state:
             self.state = state
             LOGGER.info("狀態：%s", state.value)
+            if self.bus is not None:
+                self.bus.publish({"type": "state", "state": state.value})
+
+    def _publish(self, event: dict) -> None:
+        if self.bus is not None:
+            self.bus.publish(event)
+
+    def _publish_audio(self, status) -> None:
+        self._frame_count += 1
+        if self._frame_count % 5 != 0:
+            return
+        self._publish(
+            {
+                "type": "audio",
+                "rms": round(status.rms, 5),
+                "threshold": round(status.threshold, 5),
+                "active": bool(status.active),
+            }
+        )
+
+    def apply_live(self, path: str, value: object) -> bool:
+        if path == "aec.delay_ms" and hasattr(self.aec, "set_delay_ms"):
+            self.aec.set_delay_ms(int(value))
+            return True
+        return False
 
     async def run(self) -> None:
         await self.asr.load()
@@ -69,6 +107,9 @@ class FlowerController:
                 )
             self._set_state(State.IDLE)
             async for input_frame in audio.frames():
+                if self.runtime is not None and self.runtime.restart_requested:
+                    raise RestartRequired()
+
                 if self._turn_task is not None and self._turn_task.done():
                     try:
                         self._turn_task.result()
@@ -76,22 +117,40 @@ class FlowerController:
                         pass
                     except Exception:
                         LOGGER.exception("本輪對話失敗")
+                        self._publish({"type": "error", "message": "本輪對話失敗"})
                     self._turn_task = None
                     segmenter.reset()
                     audio.drain()
                     self._set_state(State.IDLE)
 
+                if self.live is not None and not self.live.listening:
+                    continue
+
+                # 主動碎碎念：安靜超過 timeout 就主動說一句。
+                if (
+                    self.live is not None
+                    and self.live.idle_chat_enabled
+                    and self.live.idle_chat_prompt.strip()
+                    and self._turn_task is None
+                    and self.state is State.IDLE
+                    and time.monotonic() - self._last_activity
+                    >= self.live.idle_chat_timeout_s
+                ):
+                    self._last_activity = time.monotonic()
+                    self._turn_task = asyncio.create_task(self._idle_chat())
+
                 # 關閉插話時，回答期間直接丟棄麥克風音框。回答結束後上方會再清空佇列，
                 # 避免喇叭回音被當成下一句使用者語音。
-                if self._turn_task is not None and not self.config.interaction.barge_in_enabled:
+                if self._turn_task is not None and not self._barge_in:
                     continue
 
                 clean_frame = self.aec.process_capture(input_frame)
                 frame_16k = resampler.process(clean_frame)
                 utterance, status = segmenter.push(frame_16k)
+                self._publish_audio(status)
 
                 if (
-                    self.config.interaction.barge_in_enabled
+                    self._barge_in
                     and self._turn_task is not None
                     and status.active
                     and self.state in {State.THINKING, State.SPEAKING}
@@ -116,18 +175,83 @@ class FlowerController:
                 if utterance is not None:
                     self._turn_task = asyncio.create_task(self._handle_utterance(utterance))
 
+    @property
+    def _barge_in(self) -> bool:
+        if self.live is not None:
+            return self.live.barge_in_enabled
+        return self.config.interaction.barge_in_enabled
+
     async def text_turn(self, text: str, *, speak: bool = True) -> str:
-        history = self.memory.recent(self.config.llm.recent_turns)
+        history = self.memory.recent(self._recent_turns)
         self.memory.add("user", text)
+        return await self._generate(text, history, speak=speak, source="user")
+
+    async def _idle_chat(self) -> None:
+        try:
+            history = self.memory.recent(self._recent_turns)
+            await self._generate(
+                self.live.idle_chat_prompt if self.live else self.config.idle_chat.prompt,
+                history,
+                speak=True,
+                source="idle",
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("主動碎碎念失敗")
+
+    @property
+    def _recent_turns(self) -> int:
+        if self.live is not None:
+            return self.live.recent_turns
+        return self.config.llm.recent_turns
+
+    def _persona_with_summary(self, *, refresh_summary: bool) -> str:
+        persona = (self.live.persona if self.live is not None else "") or self.config.llm.persona
+        if not refresh_summary:
+            return persona
+        if not self._summary_cache:
+            return persona
+        return persona + "\n\n背景（較早的對話摘要）：\n" + self._summary_cache
+
+    async def _generate(self, user_text: str, history: list[dict[str, str]], *, speak: bool, source: str) -> str:
         self._set_state(State.THINKING)
+        if self.bus is not None and source == "user":
+            self.bus.publish({"type": "user_text", "text": user_text})
+
+        refresh_summary = False
+        if source == "user":
+            count = self.memory.count()
+            if count > self._recent_turns * 2 and count - self._summary_count >= 8:
+                summary = await self.llm.summarize(self.memory.older_than(self._recent_turns))
+                if summary:
+                    self._summary_cache = summary
+                    LOGGER.info("已建立較早對話摘要（%d 字）", len(summary))
+                    refresh_summary = True
+                self._summary_count = count
+
+        persona = self._persona_with_summary(refresh_summary=refresh_summary)
+
         response_parts: list[str] = []
         chunker = SpeechChunker()
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         async def produce() -> None:
-            async for token in self.llm.stream_reply(text, history):
+            temperature = self._live_value("temperature", self.config.llm.temperature)
+            top_p = self._live_value("top_p", self.config.llm.top_p)
+            max_tokens = self._live_value("max_tokens", self.config.llm.max_tokens)
+            async for token in self.llm.stream_reply(
+                user_text,
+                history,
+                persona=persona,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+            ):
                 response_parts.append(token)
                 print(token, end="", flush=True)
+                if self.bus is not None:
+                    self.bus.publish({"type": "flower_delta", "text": token})
                 if speak:
                     for chunk in chunker.feed(token):
                         await speech_queue.put(chunk)
@@ -161,10 +285,16 @@ class FlowerController:
         await asyncio.gather(produce(), consume())
         print()
         response = "".join(response_parts).strip()
-        if response:
+        if response and source == "user":
             self.memory.add("assistant", response)
         self._set_state(State.IDLE)
+        self._last_activity = time.monotonic()
         return response
+
+    def _live_value(self, name: str, fallback: object) -> object:
+        if self.live is None:
+            return fallback
+        return getattr(self.live, name, fallback)
 
     async def _handle_utterance(self, utterance) -> None:
         self._set_state(State.TRANSCRIBING)
@@ -172,5 +302,6 @@ class FlowerController:
         if not text:
             LOGGER.info("沒有辨識到文字")
             return
+        self._last_activity = time.monotonic()
         print(f"\n你：{text}\n{self.config.app.name}：", end="", flush=True)
         await self.text_turn(text, speak=True)

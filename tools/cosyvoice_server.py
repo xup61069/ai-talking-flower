@@ -23,6 +23,7 @@ _sample_rate = 24_000
 _prompt_text = ""
 _prompt_wav = ""
 _style_instruction = ""
+_style_file: Path | None = None
 _speaker_id = "flower"
 _token_hop_len = 25
 _flow_steps = 10
@@ -99,6 +100,25 @@ def health() -> dict[str, object]:
     }
 
 
+@app.post("/reload")
+def reload_style() -> dict[str, object]:
+    """熱載 voice/style.txt，不必重啟整個 server。"""
+    if _model is None:
+        raise HTTPException(status_code=503, detail="CosyVoice 尚未載入")
+    if _style_file is None:
+        return {"ok": True, "style": False, "reason": "沒有 style 檔"}
+    with _inference_lock:
+        _style_instruction = _style_file.read_text(encoding="utf-8-sig").strip()
+        try:
+            _model.remove_zero_shot_spk(_speaker_id)
+        except Exception:
+            pass
+        speaker_prompt = _style_instruction or _prompt_text
+        _model.add_zero_shot_spk(speaker_prompt, _prompt_wav, _speaker_id)
+    LOGGER.info("已熱載 style.txt：%d 字", len(_style_instruction))
+    return {"ok": True, "style": bool(_style_instruction)}
+
+
 @app.post("/v1/tts")
 def synthesize(request: SpeechRequest) -> StreamingResponse:
     text = request.text.strip()
@@ -144,7 +164,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    global _model, _sample_rate, _prompt_text, _prompt_wav, _style_instruction, _flow_steps
+    global _model, _sample_rate, _prompt_text, _prompt_wav, _style_instruction, _style_file, _flow_steps
 
     args = parse_args()
     root = args.cosyvoice_root.resolve()
@@ -182,6 +202,7 @@ def main() -> None:
     if style_file:
         if not style_file.is_file():
             raise FileNotFoundError(f"找不到聲音風格檔：{style_file}")
+        _style_file = style_file
         _style_instruction = style_file.read_text(encoding="utf-8-sig").strip()
     speaker_prompt = _style_instruction or _prompt_text
     _model.add_zero_shot_spk(speaker_prompt, _prompt_wav, _speaker_id)

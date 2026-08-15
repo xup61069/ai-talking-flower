@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>花花控制台</title>
+<style>
+  :root {
+    --bg: #17171c; --panel: #202028; --panel2: #26262f; --border: #35353f;
+    --text: #e8e8ee; --dim: #9a9aa8; --accent: #e97ba0; --green: #5cc48a;
+    --orange: #e0a15c; --red: #e06666;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; font-size: 14px;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  .badge {
+    padding: 3px 12px; border-radius: 999px; font-weight: 600; font-size: 13px;
+    background: var(--panel2); border: 1px solid var(--border);
+  }
+  .badge.speaking { background: #4a2434; border-color: var(--accent); color: var(--accent); }
+  .badge.listening { background: #1e3a2c; border-color: var(--green); color: var(--green); }
+  .badge.thinking { background: #3a331e; border-color: var(--orange); color: var(--orange); }
+  button {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #3d2130; border-color: var(--accent); color: #ffd6e4; }
+  button.danger:hover { border-color: var(--red); color: var(--red); }
+  input, select, textarea {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 100%;
+  }
+  textarea { font-family: inherit; resize: vertical; }
+  main { display: grid; grid-template-columns: 1fr 320px; gap: 12px; padding: 12px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .panel h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
+  #chat { height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; line-height: 1.55; white-space: pre-wrap; }
+  .msg.user { align-self: flex-end; background: #2c3b57; }
+  .msg.flower { align-self: flex-start; background: var(--panel2); border-left: 3px solid var(--accent); }
+  .meter { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; margin: 6px 0; }
+  .meter > div { height: 100%; background: linear-gradient(90deg, var(--green), var(--orange), var(--red)); width: 0%; transition: width .1s; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .row > * { flex: 1; }
+  .row > button { flex: 0 0 auto; }
+  .mini { font-size: 12px; color: var(--dim); }
+  #logs {
+    height: 180px; overflow-y: auto; background: #101014; border-radius: 10px;
+    padding: 8px; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap;
+  }
+  #logs .err { color: var(--red); }
+  details { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
+  details summary {
+    cursor: pointer; padding: 8px 12px; background: var(--panel2); font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+  }
+  details .body { padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 700px) { details .body { grid-template-columns: 1fr; } }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+  .tag { font-size: 10px; padding: 1px 8px; border-radius: 999px; }
+  .tag.live { background: #1e3a2c; color: var(--green); }
+  .tag.restart { background: #3a331e; color: var(--orange); }
+  .banner { padding: 8px 12px; border-radius: 10px; margin-bottom: 10px; display: none; }
+  .banner.show { display: block; }
+  .banner.info { background: #1e3a2c; color: var(--green); }
+  .banner.warn { background: #3a331e; color: var(--orange); }
+  #voices { display: flex; flex-direction: column; gap: 6px; }
+  .voice-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; background: var(--panel2); }
+  #memlist { max-height: 220px; overflow-y: auto; font-size: 12px; }
+  #memlist .m { margin-bottom: 4px; }
+  #memlist .m b { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1><span id="flower-name">花花</span> 控制台</h1>
+  <span id="state-badge" class="badge">連線中…</span>
+  <button id="btn-listen">暫停聆聽</button>
+  <button id="btn-restart">重啟</button>
+</header>
+<div class="banner" id="banner"></div>
+
+<main>
+  <section class="panel">
+    <h2>對話</h2>
+    <div id="chat"><div class="mini">等待對話開始…</div></div>
+    <div class="row" style="margin-top:10px">
+      <input id="test-llm-text" placeholder="測試 LLM（不經過麥克風）" value="跟我說一句話">
+      <button class="primary" id="btn-test-llm">測試 LLM</button>
+    </div>
+    <div class="row">
+      <input id="test-tts-text" placeholder="測試語音" value="嗨，我準備好了。">
+      <button class="primary" id="btn-test-tts">測試語音</button>
+    </div>
+  </section>
+
+  <aside>
+    <section class="panel">
+      <h2>音量計</h2>
+      <div class="meter"><div id="rms-bar"></div></div>
+      <span class="mini" id="rms-text">rms 0.000 / 門檻 0.008</span>
+    </section>
+
+    <section class="panel">
+      <h2>聲音</h2>
+      <div id="voice-panel" style="display:none">
+        <div class="mini" style="margin-bottom:8px">CosyVoice 參考音色（切換後重啟 server，約 30～60 秒）</div>
+        <div id="voices"></div>
+        <div style="margin-top:8px">
+          <label>語氣風格（style.txt）</label>
+          <textarea id="style-text" rows="3"></textarea>
+          <div class="row" style="margin-top:6px">
+            <button id="btn-style-save">儲存風格</button>
+          </div>
+        </div>
+      </div>
+      <div id="voice-muted" class="mini">目前為 Kokoro 模式，音色在設定區調整。</div>
+    </section>
+
+    <section class="panel">
+      <h2>記憶</h2>
+      <div class="row">
+        <span class="mini" id="mem-count">—</span>
+        <button id="btn-mem-refresh">重新整理</button>
+        <button id="btn-mem-export">匯出</button>
+        <button class="danger" id="btn-mem-clear">清除</button>
+      </div>
+      <div id="memlist" style="display:none"></div>
+    </section>
+  </aside>
+</main>
+
+<section class="panel" style="margin: 0 12px 12px">
+  <h2>日誌</h2>
+  <div id="logs">連線中…</div>
+</section>
+
+<section class="panel" style="margin: 0 12px 12px">
+  <h2>設定</h2>
+  <div id="settings"></div>
+  <div class="row" style="margin-top: 12px">
+    <button class="primary" id="btn-settings-save" style="flex:0 0 auto">儲存設定</button>
+    <span class="mini" id="settings-status"></span>
+  </div>
+</section>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let ws = null;
+let state = "等待說話";
+let flowerBlock = null;
+let settingsData = [];
+
+function banner(text, kind, ms = 5000) {
+  const b = $("banner");
+  b.textContent = text;
+  b.className = "banner show " + (kind || "info");
+  setTimeout(() => { if (b.textContent === text) b.classList.remove("show"); }, ms);
+}
+
+function setState(s) {
+  state = s;
+  const badge = $("state-badge");
+  badge.textContent = s;
+  badge.className = "badge " + (s.includes("說話中") ? "speaking" : s.includes("正在聽") ? "listening" : s.includes("思考") || s.includes("辨識") ? "thinking" : "");
+}
+
+function appendMsg(role, text) {
+  const chat = $("chat");
+  if (chat.firstElementChild && chat.firstElementChild.classList.contains("mini")) {
+    chat.innerHTML = "";
+  }
+  const el = document.createElement("div");
+  el.className = "msg " + role;
+  el.textContent = text;
+  chat.appendChild(el);
+  chat.scrollTop = chat.scrollHeight;
+  return el;
+}
+
+function appendLog(message, isError) {
+  const logs = $("logs");
+  if (logs.firstChild && logs.firstChild.nodeType === 3) logs.innerHTML = "";
+  const line = document.createElement("div");
+  line.className = isError ? "err" : "";
+  line.textContent = message;
+  logs.appendChild(line);
+  while (logs.children.length > 300) logs.removeChild(logs.firstChild);
+  logs.scrollTop = logs.scrollHeight;
+}
+
+function handleEvent(evt) {
+  switch (evt.type) {
+    case "state":
+      setState(evt.state);
+      break;
+    case "audio":
+      $("rms-bar").style.width = Math.min(100, evt.rms / (evt.threshold || 0.001) * 50) + "%";
+      $("rms-text").textContent = `rms ${evt.rms.toFixed(4)} / 門檻 ${evt.threshold.toFixed(4)}`;
+      break;
+    case "user_text":
+      appendMsg("user", evt.text);
+      flowerBlock = null;
+      break;
+    case "flower_delta":
+      if (!flowerBlock) flowerBlock = appendMsg("flower", "");
+      flowerBlock.textContent += evt.text;
+      $("chat").scrollTop = $("chat").scrollHeight;
+      break;
+    case "log":
+      appendLog(evt.message);
+      break;
+    case "error":
+      appendLog("錯誤：" + (evt.message || ""), true);
+      banner("發生錯誤，請看日誌", "warn");
+      break;
+    case "paused":
+      $("btn-listen").textContent = "恢復聆聽";
+      banner("已暫停聆聽");
+      break;
+    case "resumed":
+      $("btn-listen").textContent = "暫停聆聽";
+      banner("已恢復聆聽");
+      break;
+    case "ping":
+      break;
+  }
+}
+
+function connect() {
+  ws = new WebSocket("ws://" + location.host + "/api/ws");
+  ws.onmessage = (e) => { try { handleEvent(JSON.parse(e.data)); } catch (err) { } };
+  ws.onclose = () => {
+    $("state-badge").textContent = "重新連線中…";
+    setTimeout(connect, 1200);
+  };
+}
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
+  });
+  return res.json();
+}
+
+async function get(path) { return (await fetch(path)).json(); }
+
+$("btn-listen").onclick = async () => {
+  const paused = $("btn-listen").textContent.includes("恢復");
+  const res = await post("/api/action", { action: paused ? "resume" : "pause" });
+  if (!res.ok) banner("操作失敗：" + (res.reason || ""), "warn");
+};
+
+$("btn-restart").onclick = async () => {
+  banner("正在要求重啟…", "info");
+  await post("/api/action", { action: "restart" });
+};
+
+$("btn-test-tts").onclick = async () => {
+  const res = await post("/api/action", { action: "test_tts", text: $("test-tts-text").value });
+  if (!res.ok) banner(res.reason || "測試失敗", "warn");
+};
+
+$("btn-test-llm").onclick = async () => {
+  const res = await post("/api/action", { action: "test_llm", text: $("test-llm-text").value, speak: true });
+  if (!res.ok) banner(res.reason || "測試失敗", "warn");
+};
+
+/* ---------- 設定表單 ---------- */
+const SECTION_NAMES = {
+  app: "應用程式", audio: "音訊", aec: "回音消除", interaction: "互動",
+  idle_chat: "主動碎碎念", vad: "語音偵測", asr: "語音辨識", llm: "大腦", tts: "聲音",
+};
+
+function fieldInput(spec) {
+  const name = "f-" + spec.path;
+  if (spec.kind === "bool") {
+    return `<label><input type="checkbox" id="${name}" data-path="${spec.path}" ${spec.value ? "checked" : ""}> ${spec.label}</label>`;
+  }
+  let input;
+  if (spec.kind === "choice") {
+    input = `<select id="${name}" data-path="${spec.path}">` +
+      spec.options.map((o) => `<option value="${o}" ${String(o) === String(spec.value) ? "selected" : ""}>${o}</option>`).join("") +
+      "</select>";
+  } else if (spec.kind === "text") {
+    input = `<textarea id="${name}" data-path="${spec.path}" rows="3">${String(spec.value).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</textarea>`;
+  } else {
+    const attrs = `min="${spec.minimum}" max="${spec.maximum}" step="${spec.step}"`;
+    input = `<input type="number" id="${name}" data-path="${spec.path}" value="${spec.value}" ${attrs}>`;
+  }
+  return `<div class="field"><label>${spec.label} <span class="tag ${spec.apply}">${spec.apply === "live" ? "即時" : "需重啟"}</span></label>${input}</div>`;
+}
+
+async function renderSettings() {
+  const data = await get("/api/settings");
+  settingsData = data.settings;
+  const groups = {};
+  for (const spec of settingsData) {
+    const section = spec.path.split(".")[0];
+    (groups[section] = groups[section] || []).push(spec);
+  }
+  const wrap = $("settings");
+  wrap.innerHTML = "";
+  for (const [section, specs] of Object.entries(groups)) {
+    const details = document.createElement("details");
+    details.open = false;
+    const summary = document.createElement("summary");
+    summary.textContent = SECTION_NAMES[section] || section;
+    details.appendChild(summary);
+    const body = document.createElement("div");
+    body.className = "body";
+    body.innerHTML = specs.map(fieldInput).join("");
+    details.appendChild(body);
+    wrap.appendChild(details);
+  }
+}
+
+$("btn-settings-save").onclick = async () => {
+  const paths = {};
+  document.querySelectorAll("[data-path]").forEach((el) => {
+    if (el.type === "checkbox") paths[el.dataset.path] = el.checked;
+    else if (el.type === "number") paths[el.dataset.path] = el.value === "" ? el.min : Number(el.value);
+    else paths[el.dataset.path] = el.value;
+  });
+  const res = await (await fetch("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+  })).json();
+  $("settings-status").textContent = res.errors
+    ? "錯誤：" + res.errors.join("、")
+    : `已套用 ${res.applied_live.length} 項即時設定${res.needs_restart.length ? "，重啟項目將自動套用" : ""}`;
+  if (res.needs_restart.length) banner("有設定需要重啟，花花會自動以新設定重建", "warn", 8000);
+};
+
+/* ---------- 音色與風格 ---------- */
+async function renderVoices() {
+  const status = await get("/api/status");
+  $("flower-name").textContent = status.name || "花花";
+  const isCosy = String(status.tts_backend || "").includes("cosyvoice");
+  $("voice-panel").style.display = isCosy ? "" : "none";
+  $("voice-muted").style.display = isCosy ? "none" : "";
+  if (!isCosy) return;
+  const data = await get("/api/voices");
+  const wrap = $("voices");
+  wrap.innerHTML = "";
+  const mk = (index, label, active, extra) => {
+    const el = document.createElement("label");
+    el.className = "voice-item";
+    el.innerHTML = `<input type="radio" name="voice" value="${index}" ${active ? "checked" : ""}> <span>${label}</span> <span class="mini">${extra || ""}</span>`;
+    el.querySelector("input").onchange = async () => {
+      banner(`正在切換到「${label}」並重啟 CosyVoice…`, "warn", 60000);
+      await post("/api/voices", { index });
+    };
+    return el;
+  };
+  wrap.appendChild(mk(0, "官方示範音色", data.active === null || !data.active));
+  data.voices.forEach((v) => wrap.appendChild(mk(v.index, v.voice, data.active === v.voice, v.transcript)));
+  const styleRes = await get("/api/style");
+  $("style-text").value = styleRes.style || "";
+}
+
+$("btn-style-save").onclick = async () => {
+  const res = await (await fetch("/api/style", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ style: $("style-text").value }),
+  })).json();
+  banner(res.ok ? "風格已更新" : "風格儲存失敗", res.ok ? "info" : "warn");
+};
+
+/* ---------- 記憶 ---------- */
+let memVisible = false;
+$("btn-mem-refresh").onclick = async () => {
+  const data = await get("/api/memory");
+  $("mem-count").textContent = `${data.messages.length} 則訊息`;
+  const wrap = $("memlist");
+  if (!memVisible) { wrap.style.display = ""; memVisible = true; }
+  wrap.innerHTML = data.messages.map((m) =>
+    `<div class="m"><b>${m.role === "user" ? "你" : "花花"}</b> ${m.content}</div>`).join("");
+  if (!data.messages.length) wrap.innerHTML = '<div class="mini">（空的）</div>';
+};
+$("btn-mem-export").onclick = async () => {
+  const res = await post("/api/action", { action: "export_memory" });
+  if (!res.ok) return;
+  const blob = new Blob([JSON.stringify(res.messages, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "flower-memory.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$("btn-mem-clear").onclick = async () => {
+  if (!confirm("確定清除所有對話記憶？")) return;
+  const res = await post("/api/action", { action: "clear_memory" });
+  if (res.ok) { $("mem-count").textContent = "0 則訊息"; $("memlist").innerHTML = ""; }
+};
+
+async function init() {
+  connect();
+  await renderSettings();
+  await renderVoices();
+  $("btn-mem-refresh").click();
+  setInterval($("btn-mem-refresh").click, 30000);
+}
+init();
+</script>
+</body>
+</html>

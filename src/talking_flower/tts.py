@@ -16,6 +16,7 @@ import sounddevice as sd
 from .aec import BypassEchoCanceller, EchoCanceller
 from .audio import resolve_device
 from .config import AudioConfig, TtsConfig
+from .settings import LiveSettings
 
 
 LOGGER = logging.getLogger(__name__)
@@ -88,11 +89,13 @@ class _PcmPlayer:
         device: int | None,
         volume: int,
         aec: EchoCanceller,
+        live: LiveSettings | None = None,
     ) -> None:
         self.source_rate = source_rate
         self.sample_rate = aec.sample_rate if aec.enabled else source_rate
         self.device = device
-        self.volume = volume
+        self._volume = volume
+        self.live = live
         self.aec = aec
         self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=24)
         self._error: BaseException | None = None
@@ -180,8 +183,9 @@ class _PcmPlayer:
             self._error = error
 
     def _prepare(self, data: bytes) -> bytes:
+        volume = self.live.volume if self.live is not None else self._volume
         samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
-        samples *= max(0, min(self.volume, 100)) / 100.0
+        samples *= max(0, min(volume, 100)) / 100.0
         if self.sample_rate != self.source_rate:
             if self.sample_rate % self.source_rate:
                 raise ValueError("AEC 播放端目前只支援整數倍率升採樣")
@@ -216,9 +220,16 @@ class _PcmPlayer:
 
 
 class HttpPcmTTS:
-    def __init__(self, config: TtsConfig, audio: AudioConfig, aec: EchoCanceller) -> None:
+    def __init__(
+        self,
+        config: TtsConfig,
+        audio: AudioConfig,
+        aec: EchoCanceller,
+        live: LiveSettings | None = None,
+    ) -> None:
         self.config = config
         self.aec = aec
+        self.live = live
         self._converter = OpenCC("t2s") if config.backend == "kokoro" else None
         self._client = httpx.AsyncClient(
             base_url=config.base_url.rstrip("/"),
@@ -271,20 +282,27 @@ class HttpPcmTTS:
         blend_carry: np.ndarray | None = None
         try:
             request_text = self._converter.convert(text) if self._converter is not None else text
+            speed = self.live.speed if self.live is not None else self.config.speed
             async with self._client.stream(
                 "POST",
                 "/v1/tts",
                 json={
                     "text": request_text,
                     "voice": self.config.voice,
-                    "speed": self.config.speed,
+                    "speed": speed,
                 },
             ) as response:
                 response.raise_for_status()
                 sample_rate = int(response.headers.get("X-Sample-Rate", self.config.sample_rate))
                 player = self._turn_player
                 if player is None:
-                    player = _PcmPlayer(sample_rate, self._device, self.config.volume, self.aec)
+                    player = _PcmPlayer(
+                        sample_rate,
+                        self._device,
+                        self.config.volume,
+                        self.aec,
+                        self.live,
+                    )
                     if self._in_turn:
                         self._turn_player = player
                     else:
@@ -345,9 +363,10 @@ def create_tts(
     config: TtsConfig,
     audio: AudioConfig,
     aec: EchoCanceller | None = None,
+    live: LiveSettings | None = None,
 ) -> TextToSpeech:
     if config.backend == "windows_sapi":
         return WindowsSapiTTS(config)
     if config.backend in {"cosyvoice", "kokoro"}:
-        return HttpPcmTTS(config, audio, aec or BypassEchoCanceller(audio.sample_rate))
+        return HttpPcmTTS(config, audio, aec or BypassEchoCanceller(audio.sample_rate), live)
     raise ValueError(f"不支援的 TTS backend：{config.backend}")
