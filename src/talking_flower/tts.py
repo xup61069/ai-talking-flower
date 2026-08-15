@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import logging
+import os
 import queue
 import threading
 from typing import Protocol
@@ -96,6 +97,7 @@ class _PcmPlayer:
         self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=24)
         self._error: BaseException | None = None
         self._stop = threading.Event()
+        self._dump_path = os.environ.get("FLOWER_TTS_DUMP", "").strip()
         self._thread = threading.Thread(
             target=self._run,
             name="flower-audio-output",
@@ -112,6 +114,8 @@ class _PcmPlayer:
             silence_burst = max(1, int(0.05 * self.sample_rate / self.aec.frame_size))
             silence_frame = b"\x00" * frame_bytes
             silence_ref = np.zeros(self.aec.frame_size, dtype=np.float32)
+            silence_frames = 0
+            dump_frames: list[bytes] | None = [] if self._dump_path else None
             with sd.RawOutputStream(
                 device=self.device,
                 samplerate=self.sample_rate,
@@ -123,12 +127,19 @@ class _PcmPlayer:
                     try:
                         chunk = self._queue.get(timeout=0.05)
                     except queue.Empty:
+                        stopped = False
                         for _ in range(silence_burst):
                             if self._stop.is_set():
-                                return
+                                stopped = True
+                                break
                             if self.aec.enabled:
                                 self.aec.process_render(silence_ref)
                             stream.write(silence_frame)
+                            silence_frames += 1
+                            if dump_frames is not None:
+                                dump_frames.append(silence_frame)
+                        if stopped:
+                            return
                         continue
                     if chunk is None:
                         break
@@ -142,6 +153,8 @@ class _PcmPlayer:
                             reference = np.frombuffer(audio_frame, dtype="<i2").astype(np.float32)
                             self.aec.process_render(reference / 32768.0)
                         stream.write(audio_frame)
+                        if dump_frames is not None:
+                            dump_frames.append(audio_frame)
                 if pending and not self._stop.is_set():
                     if self.aec.enabled:
                         reference = np.frombuffer(pending, dtype="<i2").astype(np.float32) / 32768.0
@@ -149,6 +162,20 @@ class _PcmPlayer:
                         padded[: len(reference)] = reference
                         self.aec.process_render(padded)
                     stream.write(pending)
+                    if dump_frames is not None:
+                        dump_frames.append(pending)
+                if not self._stop.is_set():
+                    # Pa_CloseStream 會丟棄裝置內尚未播完的緩衝；先 stop 讓尾音播完再關閉。
+                    stream.stop()
+            if silence_frames:
+                LOGGER.info(
+                    "TTS 播放補了 %d 個靜音框（%.0f ms）",
+                    silence_frames,
+                    silence_frames * frame_bytes / 2 / self.sample_rate * 1000,
+                )
+            if dump_frames is not None:
+                np.save(self._dump_path, np.frombuffer(b"".join(dump_frames), dtype="<i2"))
+                LOGGER.info("TTS dump 已寫入 %s（%d 個音框）", self._dump_path, len(dump_frames))
         except BaseException as error:
             self._error = error
 
@@ -207,6 +234,7 @@ class HttpPcmTTS:
         # 一輪對話只建立一個播放器：第一句的音訊還在播放時，下一句的音訊
         # 已經開始生成並送入佇列，句子之間不會因為 TTS 生成而停頓。
         self._turn_player: _PcmPlayer | None = None
+        self._in_turn = False
 
     async def health(self) -> bool:
         try:
@@ -218,13 +246,16 @@ class HttpPcmTTS:
 
     async def begin_turn(self) -> None:
         self._turn_player = None
+        self._in_turn = True
 
     async def end_turn(self) -> None:
+        self._in_turn = False
         player, self._turn_player = self._turn_player, None
         if player is not None:
             await player.finish()
 
     def abort_turn(self) -> None:
+        self._in_turn = False
         player, self._turn_player = self._turn_player, None
         if player is not None:
             player.abort()
@@ -254,8 +285,14 @@ class HttpPcmTTS:
                 player = self._turn_player
                 if player is None:
                     player = _PcmPlayer(sample_rate, self._device, self.config.volume, self.aec)
-                    owned = player
+                    if self._in_turn:
+                        self._turn_player = player
+                    else:
+                        owned = player
                 received = 0
+                # httpx chunk 不保證對齊取樣邊界；若直接把奇數位元組切掉，
+                # 後續全部樣本會錯位變成雜訊，所以要保留未對齊的位元組給下一段。
+                pending_bytes = b""
 
                 async def write_samples(samples: np.ndarray) -> None:
                     nonlocal received
@@ -264,10 +301,12 @@ class HttpPcmTTS:
                     await player.write(pcm)
 
                 async for chunk in response.aiter_bytes():
-                    aligned = len(chunk) - len(chunk) % 2
+                    data = pending_bytes + chunk
+                    aligned = len(data) - len(data) % 2
+                    pending_bytes = data[aligned:]
                     if not aligned:
                         continue
-                    samples = np.frombuffer(chunk[:aligned], dtype="<i2").astype(np.float32) / 32768.0
+                    samples = np.frombuffer(data[:aligned], dtype="<i2").astype(np.float32) / 32768.0
                     if blend_carry is not None:
                         if len(samples) >= blend_samples:
                             ramp = np.linspace(0.0, 1.0, blend_samples, dtype=np.float32)
