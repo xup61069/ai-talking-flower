@@ -16,6 +16,7 @@ else {
 }
 $modelDir = Join-Path $cosyRoot 'pretrained_models\Fun-CosyVoice3-0.5B'
 $promptWav = Join-Path $cosyRoot 'asset\zero_shot_prompt.wav'
+$promptText = 'You are a helpful assistant.<|endofprompt|>希望你以后能够做的比我还好呦。'
 $styleFile = Join-Path $projectRoot 'voice\style.txt'
 $voiceSelection = Join-Path $projectRoot 'voice\active.json'
 $dataDir = Join-Path $projectRoot 'data'
@@ -32,6 +33,9 @@ if (Test-Path -LiteralPath $voiceSelection) {
             $promptWav = (Resolve-Path -LiteralPath $candidate).Path
             Write-Host "CosyVoice3 voice: $($selection.name)"
         }
+    }
+    if ($selection.prompt_text) {
+        $promptText = [string]$selection.prompt_text
     }
 }
 
@@ -64,6 +68,7 @@ $arguments = @(
     '--cosyvoice-root', $cosyRoot,
     '--model-dir', $modelDir,
     '--prompt-wav', $promptWav,
+    '--prompt-text', $promptText,
     '--style-file', $styleFile,
     '--flow-steps', '6',
     '--host', '127.0.0.1',

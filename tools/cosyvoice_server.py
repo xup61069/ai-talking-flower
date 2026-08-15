@@ -35,6 +35,11 @@ class SpeechRequest(BaseModel):
     speed: float = 1.0
 
 
+class SpeakerRequest(BaseModel):
+    wav: str
+    text: str
+
+
 def _stream_pcm(text: str, speed: float) -> Iterator[bytes]:
     if _model is None:
         raise RuntimeError("CosyVoice 尚未載入")
@@ -117,6 +122,30 @@ def reload_style() -> dict[str, object]:
         _model.add_zero_shot_spk(speaker_prompt, _prompt_wav, _speaker_id)
     LOGGER.info("已熱載 style.txt：%d 字", len(_style_instruction))
     return {"ok": True, "style": bool(_style_instruction)}
+
+
+@app.post("/speaker")
+def set_speaker(request: SpeakerRequest) -> dict[str, object]:
+    """熱載參考音檔＋逐字稿（換聲線），不必重啟整個 server。"""
+    if _model is None:
+        raise HTTPException(status_code=503, detail="CosyVoice 尚未載入")
+    wav = Path(request.wav)
+    if not wav.is_file():
+        raise HTTPException(status_code=400, detail=f"找不到聲音參考檔：{wav}")
+    text = request.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="逐字稿不可為空")
+    with _inference_lock:
+        try:
+            _model.remove_zero_shot_spk(_speaker_id)
+        except Exception:
+            pass
+        _prompt_text = text
+        _prompt_wav = str(wav.resolve())
+        speaker_prompt = _style_instruction or _prompt_text
+        _model.add_zero_shot_spk(speaker_prompt, _prompt_wav, _speaker_id)
+    LOGGER.info("已熱載參考音檔：%s（%d 字）", _prompt_wav, len(text))
+    return {"ok": True, "speaker": _speaker_id, "wav": _prompt_wav}
 
 
 @app.post("/v1/tts")

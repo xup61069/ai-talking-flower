@@ -53,7 +53,7 @@ TTS 串流是這次改進的核心：兩個 server 都把音訊切成小塊即�
 - **記憶**：檢視目前的對話、匯出或清除；超過 `recent_turns` 的舊訊息會自動濃縮成背景摘要（每新增 8 則重建一次）。
 - **碎碎念**：`config.toml` 的 `[idle_chat]` 啟用後，花花安靜超過 `timeout_s` 會主動說一句話；控制台可直接開關與改時間。
 - **人設／語氣**：`config.toml` 的 `[llm] persona` 即時生效，也能在控制台直接改。
-- **音色**：CosyVoice 模式可切換 `voice/active.json` 內的候選音色，並即時編輯 `voice/style.txt`。
+- **音色**：CosyVoice 模式可切換 `voice/active.json` 內的候選音色，並即時編輯 `voice/style.txt`。要換成自己的聲線，在控制台「上傳參考音檔」：一段 **8～12 秒、單一說話者、乾淨無殘響的 WAV**（檔名、腔調、音色都會跟著參考音走），附上與內容一字不差的逐字稿，套用後立即生效；重啟後也會沿用。
 - **回音延遲校準**：一鍵播放掃頻音並量測「輸出→輸入」的實際延遲，自動寫入 `aec.delay_ms` 並即時套用。
 
 設定儲存在 `data/settings.json`（覆蓋 `config.toml` 的基底值），刪掉該檔即回到 `config.toml` 設定。Web UI 需要 `fastapi` 與 `uvicorn`：`pip install -e .[ui]`。

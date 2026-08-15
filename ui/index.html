@@ -123,6 +123,16 @@
             <button id="btn-style-save">儲存風格</button>
           </div>
         </div>
+        <div style="margin-top:10px">
+          <label>換聲線：上傳參考音檔（8～12 秒乾淨女聲 WAV，腔調會跟著參考音）</label>
+          <input type="file" id="voice-ref-file" accept=".wav,audio/wav,audio/x-wav">
+          <label style="margin-top:6px">逐字稿（與音檔內容一字不差）</label>
+          <textarea id="voice-ref-text" rows="2" placeholder="例如：今天天氣真好，我們一起出去走走吧。"></textarea>
+          <div class="row" style="margin-top:6px">
+            <button id="btn-voice-ref-apply">套用新聲線</button>
+            <span class="mini" id="voice-ref-current"></span>
+          </div>
+        </div>
       </div>
       <div id="voice-muted" class="mini">目前為 Kokoro 模式，音色在設定區調整。</div>
     </section>
@@ -393,6 +403,46 @@ $("btn-style-save").onclick = async () => {
     body: JSON.stringify({ style: $("style-text").value }),
   })).json();
   banner(res.ok ? "風格已更新" : "風格儲存失敗", res.ok ? "info" : "warn");
+};
+
+async function renderVoiceRef() {
+  try {
+    const data = await get("/api/voice-ref");
+    if (!data || !data.name) { $("voice-ref-current").textContent = ""; return; }
+    const prefix = data.prompt_file && data.prompt_file.includes("candidates") ? "候選音色" : "自訂音檔";
+    $("voice-ref-current").textContent = `${prefix}：${data.name}`;
+    if (data.prompt_text) $("voice-ref-text").value = data.prompt_text;
+  } catch (e) { /* server 可能沒起來 */ }
+}
+renderVoiceRef();
+
+let voiceRefDataUrl = null;
+$("voice-ref-file").onchange = (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => { voiceRefDataUrl = reader.result; };
+  reader.readAsDataURL(file);
+};
+
+$("btn-voice-ref-apply").onclick = async () => {
+  if (!voiceRefDataUrl) { banner("請先選擇音檔", "warn"); return; }
+  const file = $("voice-ref-file").files[0];
+  const res = await (await fetch("/api/voice-ref", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: file ? file.name : "自訂參考音檔",
+      data_url: voiceRefDataUrl,
+      transcript: $("voice-ref-text").value,
+    }),
+  })).json();
+  if (res.ok) {
+    banner(res.hot_swapped ? "聲線已套用，下一句立即生效" : "已儲存；CosyVoice 下次啟動時套用", "info");
+    renderVoiceRef();
+  } else {
+    banner(res.reason || "套用失敗", "warn");
+  }
 };
 
 /* ---------- 記憶 ---------- */

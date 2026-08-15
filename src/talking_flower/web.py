@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass, field
 import json
 import logging
@@ -250,6 +251,52 @@ class WebServer:
             asyncio.create_task(self._restart_cosyvoice())
             return {"ok": True, "voice": item["voice"]}
 
+        @app.get("/api/voice-ref")
+        async def voice_ref() -> dict:
+            root = ctx.store.project_root
+            active_path = root / "voice" / "active.json"
+            info: dict = {"name": None, "prompt_file": None, "prompt_text": None}
+            if active_path.is_file():
+                try:
+                    info.update(json.loads(active_path.read_text(encoding="utf-8")))
+                except (json.JSONDecodeError, OSError):
+                    pass
+            return {"ok": True, **info}
+
+        @app.post("/api/voice-ref")
+        async def voice_ref_update(payload: dict) -> dict:
+            name = str(payload.get("name", "")).strip() or "自訂參考音檔"
+            data_url = str(payload.get("data_url", ""))
+            transcript = str(payload.get("transcript", "")).strip()
+            if "," not in data_url:
+                return JSONResponse({"ok": False, "reason": "音檔資料無效"}, status_code=400)
+            if not transcript:
+                return JSONResponse({"ok": False, "reason": "請填寫逐字稿"}, status_code=400)
+            root = ctx.store.project_root
+            try:
+                wav_bytes = base64.b64decode(data_url.split(",", 1)[1])
+            except ValueError:
+                return JSONResponse({"ok": False, "reason": "音檔資料無法解碼"}, status_code=400)
+            if len(wav_bytes) < 44:
+                return JSONResponse({"ok": False, "reason": "音檔太小，不是有效的 WAV"}, status_code=400)
+            ref_path = root / "voice" / "reference.wav"
+            ref_path.parent.mkdir(parents=True, exist_ok=True)
+            ref_path.write_bytes(wav_bytes)
+            active_path = root / "voice" / "active.json"
+            active_path.write_text(
+                json.dumps(
+                    {
+                        "name": name,
+                        "prompt_file": "voice/reference.wav",
+                        "prompt_text": transcript,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            hot = await self._hot_swap_speaker()
+            return {"ok": True, "voice": name, "hot_swapped": hot}
+
         @app.get("/api/style")
         async def style() -> dict:
             path = ctx.store.project_root / "voice" / "style.txt"
@@ -331,6 +378,29 @@ class WebServer:
             await controller.text_turn(text, speak=speak)
         except Exception:
             LOGGER.exception("測試 LLM 失敗")
+
+    async def _hot_swap_speaker(self) -> bool:
+        base_url = str(self.ctx.store.value("tts.base_url")).rstrip("/")
+        if "50000" not in base_url:
+            return False
+        root = self.ctx.store.project_root
+        wav = root / "voice" / "reference.wav"
+        active = root / "voice" / "active.json"
+        if not wav.is_file() or not active.is_file():
+            return False
+        try:
+            data = json.loads(active.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    f"{base_url}/speaker",
+                    json={"wav": str(wav), "text": str(data.get("prompt_text", ""))},
+                )
+                return response.status_code == 200
+        except httpx.HTTPError:
+            return False
 
     async def _reload_cosyvoice_style(self) -> bool:
         base_url = str(self.ctx.store.value("tts.base_url")).rstrip("/")

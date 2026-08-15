@@ -99,6 +99,49 @@ class WebApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/action", json={"action": "unknown_xyz"})
         self.assertEqual(response.status_code, 400)
 
+    async def test_voice_ref_roundtrip(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        try:
+            config = Path(temp.name) / "config.toml"
+            config.write_bytes((PROJECT_ROOT / "config.toml").read_bytes())
+            store = SettingsStore(config)
+            store.settings_path = Path(temp.name) / "settings.json"
+            live = LiveSettings(store)
+            bus = StatusBus()
+            runtime = RuntimeControl()
+            ctx = AppContext(store=store, live=live, bus=bus, runtime=runtime)
+            client = httpx.AsyncClient(
+                transport=ASGITransport(app=WebServer(ctx).app),
+                base_url="http://test",
+            )
+            wav = b"RIFF" + b"\x00" * 100
+            data_url = "data:audio/wav;base64," + __import__("base64").b64encode(wav).decode()
+            response = await client.post(
+                "/api/voice-ref",
+                json={"name": "測試聲線", "data_url": data_url, "transcript": "今天天氣真好。"},
+            )
+            self.assertEqual(response.status_code, 200)
+            body = response.json()
+            self.assertTrue(body["ok"])
+            active = Path(temp.name) / "voice" / "active.json"
+            self.assertTrue(active.is_file())
+            self.assertIn("reference.wav", active.read_text(encoding="utf-8"))
+            self.assertTrue((Path(temp.name) / "voice" / "reference.wav").is_file())
+            response = await client.get("/api/voice-ref")
+            info = response.json()
+            self.assertEqual(info["name"], "測試聲線")
+            self.assertEqual(info["prompt_text"], "今天天氣真好。")
+            await client.aclose()
+        finally:
+            temp.cleanup()
+
+    async def test_voice_ref_requires_transcript(self) -> None:
+        response = await self.client.post(
+            "/api/voice-ref",
+            json={"name": "x", "data_url": "data:audio/wav;base64,AAAA", "transcript": "  "},
+        )
+        self.assertEqual(response.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
