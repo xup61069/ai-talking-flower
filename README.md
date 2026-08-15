@@ -141,6 +141,17 @@ $env:PYTHONPATH = "$PWD/src"
 python -m unittest discover -s tests -v
 ```
 
+## 疑難排解：爆音
+
+播放端把一輪對話的所有句子送進同一個輸出串流，避免逐句開關 WASAPI 造成尾音截斷；佇列暫時空著時會餵入靜音框維持裝置緩衝，並在分塊接縫做 20 ms 交叉淡化。若仍聽到爆音，可把實際送給喇叭的波形錄下來分析：
+
+```powershell
+$env:FLOWER_TTS_DUMP = "$PWD\data\tts-dump.npy"
+python -m talking_flower --text "跟我說說你今天過得怎麼樣，多說幾句。"
+```
+
+然後用 numpy 檢查 dump：相鄰樣本跳變應低於約 0.2（若出現 0.5 以上跳變代表接縫破音），零值段只應出現在句子之間。
+
 ## 安裝與環境
 
 本專案需要以下本機元件：
