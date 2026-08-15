@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# 執行資料：對話紀錄、PID、log
+data/
+
+# 第三方依賴（CosyVoice 含模型約 8.3 GB，需自行下載）
+third_party/
+
+# 原生二進位（WebRTC APM DLL 請自行取得，授權見 native/THIRD-PARTY-NOTICES.txt）
+native/*.dll
+
+# 聲音候選樣本（CC BY-NC-ND 4.0，不可隨 repo 再散布）
+voice/candidates/
+
+# 輸出與暫存
+outputs/
+*.log

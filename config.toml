@@ -1,0 +1,68 @@
+[app]
+name = "花花"
+mode = "free_chat"
+database = "data/flower.db"
+log_level = "INFO"
+
+[audio]
+input_device = "INPUT (2- Volt 1)"
+input_hostapi = "Windows WASAPI"
+input_channel = 0
+sample_rate = 48000
+asr_sample_rate = 16000
+block_ms = 20
+# 留空時使用 Windows 預設輸出。之後可改成花花實際使用的裝置名稱。
+output_device = ""
+output_hostapi = ""
+
+[aec]
+enabled = true
+backend = "webrtc_aec3"
+library = "native/webrtc-apm.dll"
+# 播放到麥克風實際收音的預估延遲；換喇叭後可再校準。
+delay_ms = 90
+noise_suppression = false
+
+[interaction]
+# 關閉後，花花回答期間不監聽，也不會被自己的喇叭聲打斷。
+barge_in_enabled = false
+
+[vad]
+backend = "ten_vad"
+threshold = 0.6
+minimum_rms = 0.008
+noise_multiplier = 2.2
+calibration_ms = 2000
+speech_start_ms = 120
+speech_end_ms = 650
+pre_roll_ms = 240
+minimum_speech_ms = 280
+maximum_speech_s = 15
+
+[asr]
+backend = "funasr_streaming"
+model = "paraformer-zh-streaming"
+device = "cpu"
+chunk_size = [0, 10, 5]
+encoder_chunk_look_back = 4
+decoder_chunk_look_back = 1
+
+[llm]
+base_url = "http://127.0.0.1:8080/v1"
+model = "unsloth/Qwen3.5-4B-MTP-GGUF:UD-Q4_K_XL"
+temperature = 0.78
+top_p = 0.92
+max_tokens = 64
+timeout_s = 60
+recent_turns = 10
+
+[tts]
+# 快速完整句模式；仍會等整句生成完成後才開始播放。
+backend = "kokoro"
+voice = "zf_001"
+rate = 1
+volume = 100
+base_url = "http://127.0.0.1:50001"
+timeout_s = 60
+sample_rate = 24000
+speed = 0.9
