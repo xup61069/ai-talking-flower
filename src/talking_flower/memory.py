@@ -52,15 +52,35 @@ class ConversationMemory:
         rows.reverse()
         return [{"role": role, "content": content} for role, content in rows]
 
-    def list_all(self) -> list[dict[str, str]]:
+    def list_all(self, limit: int = 500) -> list[dict]:
         with self._lock:
             rows = self._connection.execute(
-                "SELECT role, content, created_at FROM messages ORDER BY id"
+                "SELECT id, role, content, created_at FROM messages ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        rows.reverse()
+        return [
+            {"id": row[0], "role": row[1], "content": row[2], "created_at": row[3]}
+            for row in rows
+        ]
+
+    def search(self, keyword: str, limit: int = 100) -> list[dict]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT id, role, content, created_at FROM messages WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
+                (f"%{keyword.strip()}%", limit),
             ).fetchall()
         return [
-            {"role": role, "content": content, "created_at": created_at}
-            for role, content, created_at in rows
+            {"id": row[0], "role": row[1], "content": row[2], "created_at": row[3]}
+            for row in rows
         ]
+
+    def delete(self, message_id: int) -> bool:
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM messages WHERE id = ?", (message_id,)
+            )
+            return cursor.rowcount > 0
 
     def count(self) -> int:
         with self._lock:

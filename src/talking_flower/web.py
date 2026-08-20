@@ -19,6 +19,7 @@ import uvicorn
 from .bus import BusLogHandler, RuntimeControl, StatusBus
 from .controller import FlowerController
 from .memory import ConversationMemory
+from .personas import get_persona_by_id, list_personas
 from .settings import LiveSettings, SettingsStore, SPEC_BY_PATH
 
 
@@ -54,6 +55,7 @@ class WebServer:
                 "busy": controller is not None and controller._turn_task is not None,
                 "listening": ctx.live.listening,
                 "name": ctx.store.value("app.name"),
+                "persona": getattr(ctx.live, "persona_preset", "energetic"),
                 "tts_backend": ctx.store.value("tts.backend"),
                 "restart_note": ctx.restart_note,
             }
@@ -190,13 +192,85 @@ class WebServer:
             if name == "calibrate_aec":
                 asyncio.create_task(self._run_aec_calibration())
                 return {"ok": True}
+            if name == "poke":
+                if ctx.controller is not None:
+                    reply = await ctx.controller.poke()
+                    return {"ok": True, "reply": reply}
+                return {"ok": True, "reply": "在呢～"}
             return JSONResponse({"ok": False, "reason": f"未知動作：{name}"}, status_code=400)
+
+        @app.get("/api/personas")
+        async def personas_list() -> dict:
+            return {
+                "personas": list_personas(),
+                "active": getattr(ctx.live, "persona_preset", "energetic"),
+            }
+
+        @app.post("/api/personas/select")
+        async def personas_select(payload: dict) -> dict:
+            persona_id = str(payload.get("id", "")).strip()
+            preset = get_persona_by_id(persona_id)
+            if preset is None:
+                return JSONResponse({"ok": False, "reason": "找不到指定的性格預設"}, status_code=404)
+            ctx.store.set("llm.persona", preset.persona)
+            ctx.store.set("llm.temperature", preset.temperature)
+            ctx.store.set("llm.top_p", preset.top_p)
+            ctx.store.set("tts.speed", preset.speed)
+            if preset.idle_prompt:
+                ctx.store.set("idle_chat.prompt", preset.idle_prompt)
+            ctx.live.set("llm.persona", preset.persona)
+            ctx.live.set("llm.temperature", preset.temperature)
+            ctx.live.set("llm.top_p", preset.top_p)
+            ctx.live.set("tts.speed", preset.speed)
+            if preset.idle_prompt:
+                ctx.live.set("idle_chat.prompt", preset.idle_prompt)
+            ctx.live.persona_preset = preset.id
+            ctx.bus.publish({"type": "persona_changed", "id": preset.id, "name": preset.name})
+            return {"ok": True, "id": preset.id, "name": preset.name}
+
+        @app.get("/api/reminders")
+        async def reminders_list() -> dict:
+            if ctx.controller is None or ctx.controller.reminders is None:
+                return {"reminders": []}
+            return {"reminders": ctx.controller.reminders.list_all()}
+
+        @app.post("/api/reminders")
+        async def reminders_create(payload: dict) -> dict:
+            text = str(payload.get("text", "")).strip()
+            in_seconds = float(payload.get("in_seconds", 60))
+            if not text:
+                return JSONResponse({"ok": False, "reason": "提醒文字不能為空"}, status_code=400)
+            if ctx.controller is None or ctx.controller.reminders is None:
+                return JSONResponse({"ok": False, "reason": "提醒服務尚未就緒"}, status_code=503)
+            reminder = ctx.controller.reminders.add(text, in_seconds)
+            ctx.bus.publish({"type": "reminder_added", "reminder": reminder.to_dict()})
+            return {"ok": True, "reminder": reminder.to_dict()}
+
+        @app.delete("/api/reminders/{reminder_id}")
+        async def reminders_delete(reminder_id: int) -> dict:
+            if ctx.controller is None or ctx.controller.reminders is None:
+                return JSONResponse({"ok": False, "reason": "提醒服務尚未就緒"}, status_code=503)
+            ok = ctx.controller.reminders.delete(int(reminder_id))
+            return {"ok": ok}
 
         @app.get("/api/memory")
         async def memory() -> dict:
             if ctx.memory is None:
                 return {"messages": []}
             return {"messages": ctx.memory.list_all()}
+
+        @app.get("/api/memory/search")
+        async def memory_search(q: str = "") -> dict:
+            if ctx.memory is None:
+                return {"messages": []}
+            return {"messages": ctx.memory.search(q)}
+
+        @app.delete("/api/memory/{message_id}")
+        async def memory_delete(message_id: int) -> dict:
+            if ctx.memory is None:
+                return JSONResponse({"ok": False, "reason": "記憶尚未就緒"}, status_code=503)
+            ok = ctx.memory.delete(int(message_id))
+            return {"ok": ok}
 
         @app.get("/api/voices")
         async def voices() -> dict:

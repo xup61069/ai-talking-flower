@@ -179,6 +179,7 @@ class ControllerSummaryTests(unittest.TestCase):
             tts=mock.MagicMock(),
             memory=mock.MagicMock(),
             aec=mock.MagicMock(),
+            reminders=mock.MagicMock(),
         )
         base_persona = controller._persona_with_summary()
         self.assertNotIn("背景（較早的對話摘要）", base_persona)

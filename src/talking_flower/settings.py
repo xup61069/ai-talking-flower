@@ -243,6 +243,7 @@ class LiveSettings:
         self.idle_chat_prompt: str = config.idle_chat.prompt
         self.listening: bool = True
         self.manual_busy: bool = False
+        self.persona_preset: str = "energetic"
 
     LIVE_PATHS: dict[str, str] = {
         "app.name": "name",

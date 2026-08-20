@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from enum import Enum
 import logging
+import random
 import time
 
 from .aec import EchoCanceller
@@ -12,6 +13,8 @@ from .bus import RestartRequired, RuntimeControl, StatusBus
 from .config import Config
 from .llm import LlamaCppClient, SpeechChunker
 from .memory import ConversationMemory
+from .personas import get_persona_by_id, PERSONA_PRESETS
+from .reminders import ReminderScheduler
 from .settings import LiveSettings
 from .tts import TextToSpeech
 from .vad import UtteranceSegmenter
@@ -40,6 +43,7 @@ class FlowerController:
         live: LiveSettings | None = None,
         bus: StatusBus | None = None,
         runtime: RuntimeControl | None = None,
+        reminders: ReminderScheduler | None = None,
     ) -> None:
         self.config = config
         self.asr = asr
@@ -50,12 +54,18 @@ class FlowerController:
         self.live = live
         self.bus = bus
         self.runtime = runtime
+        self.reminders = (
+            reminders
+            if reminders is not None
+            else ReminderScheduler(config.project_root / "data" / "reminders.db")
+        )
         self.state = State.IDLE
         self._turn_task: asyncio.Task[None] | None = None
         self._last_activity = time.monotonic()
         self._summary_cache = ""
         self._summary_count = 0
         self._frame_count = 0
+        self._last_asr_ms: float = 0.0
 
     def _set_state(self, state: State) -> None:
         if state != self.state:
@@ -125,6 +135,14 @@ class FlowerController:
 
                 if self.live is not None and (not self.live.listening or self.live.manual_busy):
                     continue
+
+                # 定時提醒事項檢查
+                if self.state is State.IDLE and self._turn_task is None:
+                    due_list = self.reminders.pop_due()
+                    if due_list:
+                        self._last_activity = time.monotonic()
+                        self._turn_task = asyncio.create_task(self._speak_reminder(due_list[0].text))
+                        continue
 
                 # 主動碎碎念：安靜超過 timeout 就主動說一句。
                 if (
@@ -233,11 +251,16 @@ class FlowerController:
 
         persona = self._persona_with_summary()
 
+        turn_start = time.monotonic()
+        ttft_ms: float = 0.0
+        ttfa_ms: float = 0.0
         response_parts: list[str] = []
         chunker = SpeechChunker()
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         async def produce() -> None:
+            nonlocal ttft_ms
+            first_token = True
             temperature = self._live_value("temperature", self.config.llm.temperature)
             top_p = self._live_value("top_p", self.config.llm.top_p)
             max_tokens = self._live_value("max_tokens", self.config.llm.max_tokens)
@@ -249,6 +272,9 @@ class FlowerController:
                 top_p=top_p,
                 max_tokens=max_tokens,
             ):
+                if first_token:
+                    ttft_ms = round((time.monotonic() - turn_start) * 1000, 1)
+                    first_token = False
                 response_parts.append(token)
                 print(token, end="", flush=True)
                 if self.bus is not None:
@@ -262,9 +288,11 @@ class FlowerController:
                 await speech_queue.put(None)
 
         async def consume() -> None:
+            nonlocal ttfa_ms
             if not speak:
                 return
             player_open = False
+            first_chunk = True
             try:
                 while True:
                     chunk = await speech_queue.get()
@@ -274,6 +302,9 @@ class FlowerController:
                     if not player_open:
                         await self.tts.begin_turn()
                         player_open = True
+                    if first_chunk:
+                        ttfa_ms = round((time.monotonic() - turn_start) * 1000, 1)
+                        first_chunk = False
                     await self.tts.speak(chunk)
             except asyncio.CancelledError:
                 if player_open:
@@ -288,6 +319,19 @@ class FlowerController:
         response = "".join(response_parts).strip()
         if response and source == "user":
             self.memory.add("assistant", response)
+
+        total_turn_ms = round((time.monotonic() - turn_start) * 1000, 1)
+        if self.bus is not None:
+            self.bus.publish(
+                {
+                    "type": "metrics",
+                    "asr_ms": getattr(self, "_last_asr_ms", 0.0),
+                    "ttft_ms": ttft_ms,
+                    "ttfa_ms": ttfa_ms,
+                    "total_turn_ms": total_turn_ms,
+                }
+            )
+
         self._set_state(State.IDLE)
         self._last_activity = time.monotonic()
         return response
@@ -297,12 +341,48 @@ class FlowerController:
             return fallback
         return getattr(self.live, name, fallback)
 
+    async def poke(self) -> str:
+        """點擊花花立繪時觸發的互動回覆。"""
+        persona_id = getattr(self.live, "persona_preset", "energetic")
+        preset = get_persona_by_id(persona_id) or PERSONA_PRESETS[0]
+        replies = preset.poke_replies or ["戳我幹嘛啦～花瓣很嫩的耶！"]
+        reply = random.choice(replies)
+        if self.bus is not None:
+            self.bus.publish({"type": "poke", "text": reply})
+        if self._turn_task is None and self.state is State.IDLE:
+            try:
+                self._set_state(State.SPEAKING)
+                await self.tts.begin_turn()
+                await self.tts.speak(reply)
+            finally:
+                await self.tts.end_turn()
+                self._set_state(State.IDLE)
+        return reply
+
+    async def _speak_reminder(self, text: str) -> None:
+        """定時提醒事項發聲。"""
+        LOGGER.info("觸發定時提醒：%s", text)
+        if self.bus is not None:
+            self.bus.publish({"type": "reminder", "text": text})
+        message = f"提醒時間到囉！{text}"
+        try:
+            self._set_state(State.SPEAKING)
+            await self.tts.begin_turn()
+            await self.tts.speak(message)
+        finally:
+            await self.tts.end_turn()
+            self._set_state(State.IDLE)
+
     async def _handle_utterance(self, utterance) -> None:
         self._set_state(State.TRANSCRIBING)
+        asr_start = time.monotonic()
         text = await self.asr.transcribe(utterance, self.config.audio.asr_sample_rate)
+        self._last_asr_ms = round((time.monotonic() - asr_start) * 1000, 1)
         if not text:
             LOGGER.info("沒有辨識到文字")
             return
+        if self.bus is not None:
+            self.bus.publish({"type": "asr_done", "text": text, "asr_ms": self._last_asr_ms})
         self._last_activity = time.monotonic()
         name = self._live_value("name", self.config.app.name)
         print(f"\n你：{text}\n{name}：", end="", flush=True)

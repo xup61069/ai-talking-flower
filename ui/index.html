@@ -3,64 +3,123 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>花花控制台</title>
+<title>花花控制台 - AI 閒聊花花</title>
 <style>
   :root {
-    --bg: #17171c; --panel: #202028; --panel2: #26262f; --border: #35353f;
-    --text: #e8e8ee; --dim: #9a9aa8; --accent: #e97ba0; --green: #5cc48a;
-    --orange: #e0a15c; --red: #e06666;
+    --bg: #141418; --panel: #1e1e26; --panel2: #272733; --border: #383848;
+    --text: #ececf4; --dim: #9da0b4; --accent: #f07ea5; --accent-glow: rgba(240, 126, 165, 0.25);
+    --green: #5cd096; --orange: #f2ad5c; --red: #f06a6a; --blue: #5d9cec;
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--text);
-    font-family: "Segoe UI", "Microsoft JhengHei", sans-serif; font-size: 14px;
+    font-family: "Segoe UI", "Microsoft JhengHei", -apple-system, sans-serif; font-size: 14px;
   }
   header {
-    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
-    background: var(--panel); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 18px;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex-wrap: wrap;
   }
-  header h1 { font-size: 17px; margin: 0; flex: 1; }
+  .header-left { display: flex; align-items: center; gap: 12px; }
+  .header-left h1 { font-size: 18px; margin: 0; font-weight: 700; color: #fff; }
+  .header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .badge {
     padding: 3px 12px; border-radius: 999px; font-weight: 600; font-size: 13px;
-    background: var(--panel2); border: 1px solid var(--border);
+    background: var(--panel2); border: 1px solid var(--border); transition: all .2s;
   }
-  .badge.speaking { background: #4a2434; border-color: var(--accent); color: var(--accent); }
-  .badge.listening { background: #1e3a2c; border-color: var(--green); color: var(--green); }
-  .badge.thinking { background: #3a331e; border-color: var(--orange); color: var(--orange); }
+  .badge.speaking { background: #4a2135; border-color: var(--accent); color: #ffb5cf; }
+  .badge.listening { background: #1a382b; border-color: var(--green); color: #8ef7c2; }
+  .badge.thinking { background: #3d321d; border-color: var(--orange); color: #ffd699; }
+  .metrics-badge {
+    font-size: 12px; color: var(--dim); background: #121217; padding: 4px 10px;
+    border-radius: 8px; border: 1px solid var(--border);
+  }
   button {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px; font-weight: 500;
+    transition: all .15s ease; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   }
-  button:hover { border-color: var(--accent); }
-  button.primary { background: #3d2130; border-color: var(--accent); color: #ffd6e4; }
-  button.danger:hover { border-color: var(--red); color: var(--red); }
+  button:hover { border-color: var(--accent); background: #30303e; }
+  button.primary { background: #472033; border-color: var(--accent); color: #ffe6f0; }
+  button.primary:hover { background: #5a2640; border-color: #ff9bbb; }
+  button.danger { border-color: #572b2b; color: #f8a1a1; }
+  button.danger:hover { border-color: var(--red); background: #4a2121; }
+  button.small { padding: 3px 8px; font-size: 12px; border-radius: 6px; }
   input, select, textarea {
     background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-    border-radius: 8px; padding: 6px 10px; font-size: 13px; width: 100%;
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; width: 100%; transition: border-color .15s;
   }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; }
   textarea { font-family: inherit; resize: vertical; }
-  main { display: grid; grid-template-columns: 1fr 320px; gap: 12px; padding: 12px; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
-  .panel h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; }
-  #chat { height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
-  .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; line-height: 1.55; white-space: pre-wrap; }
-  .msg.user { align-self: flex-end; background: #2c3b57; }
-  .msg.flower { align-self: flex-start; background: var(--panel2); border-left: 3px solid var(--accent); }
+
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 14px; padding: 14px; }
+  @media (max-width: 950px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px; margin-bottom: 14px; }
+  .panel h2 { font-size: 13px; margin: 0 0 10px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; }
+
+  /* 🌸 花花立繪舞台 */
+  .avatar-stage {
+    background: radial-gradient(circle at center, #2e2638 0%, #1c1a24 70%);
+    border: 1px solid var(--border); border-radius: 12px; padding: 16px; text-align: center;
+    position: relative; overflow: hidden; margin-bottom: 12px; cursor: pointer;
+    user-select: none; transition: box-shadow .3s;
+  }
+  .avatar-stage:hover { box-shadow: 0 0 20px var(--accent-glow); }
+  .speech-bubble {
+    display: inline-block; background: var(--panel2); border: 1px solid var(--accent);
+    padding: 6px 14px; border-radius: 18px; font-size: 13px; color: #fff;
+    margin-bottom: 10px; min-height: 28px; max-width: 90%; transition: all .2s;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .flower-svg-wrap {
+    width: 140px; height: 160px; margin: 0 auto; display: block;
+    transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+  .flower-poked { animation: flowerJump 0.5s ease-in-out; }
+  @keyframes flowerJump {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.18) translateY(-14px) rotate(-4deg); }
+    60% { transform: scale(0.95) translateY(4px) rotate(3deg); }
+    100% { transform: scale(1) translateY(0) rotate(0deg); }
+  }
+  @keyframes petalSway {
+    0%, 100% { transform: rotate(0deg); }
+    50% { transform: rotate(3deg); }
+  }
+  @keyframes eyesBlink {
+    0%, 90%, 100% { transform: scaleY(1); }
+    95% { transform: scaleY(0.1); }
+  }
+  @keyframes mouthTalk {
+    0%, 100% { transform: scaleY(0.4); }
+    50% { transform: scaleY(1.4); }
+  }
+  .petal-group { animation: petalSway 4s ease-in-out infinite; transform-origin: 70px 70px; }
+  .flower-eye { animation: eyesBlink 5s infinite; transform-origin: center; }
+  .flower-mouth { transition: transform 0.1s ease; transform-origin: 70px 84px; }
+  .speaking .flower-mouth { animation: mouthTalk 0.28s infinite alternate; }
+
+  /* 對話區 */
+  #chat {
+    height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
+    padding-right: 4px;
+  }
+  .msg { max-width: 82%; padding: 9px 14px; border-radius: 14px; line-height: 1.6; white-space: pre-wrap; font-size: 14px; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: #2a3c5a; color: #eaf1fb; border-bottom-right-radius: 4px; }
+  .msg.flower { align-self: flex-start; background: var(--panel2); border-left: 3px solid var(--accent); color: #fff; border-bottom-left-radius: 4px; }
   .meter { height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; margin: 6px 0; }
-  .meter > div { height: 100%; background: linear-gradient(90deg, var(--green), var(--orange), var(--red)); width: 0%; transition: width .1s; }
+  .meter > div { height: 100%; background: linear-gradient(90deg, var(--green), var(--orange), var(--red)); width: 0%; transition: width .08s; }
   .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
   .row > * { flex: 1; }
   .row > button { flex: 0 0 auto; }
   .mini { font-size: 12px; color: var(--dim); }
   #logs {
-    height: 180px; overflow-y: auto; background: #101014; border-radius: 10px;
-    padding: 8px; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap;
+    height: 160px; overflow-y: auto; background: #0f0f13; border-radius: 10px;
+    padding: 8px 12px; font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap;
   }
   #logs .err { color: var(--red); }
   details { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 10px; overflow: hidden; }
   details summary {
-    cursor: pointer; padding: 8px 12px; background: var(--panel2); font-weight: 600;
+    cursor: pointer; padding: 9px 12px; background: var(--panel2); font-weight: 600;
     display: flex; align-items: center; gap: 8px;
   }
   details .body { padding: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -68,51 +127,146 @@
   .field { display: flex; flex-direction: column; gap: 4px; }
   .field label { font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
   .tag { font-size: 10px; padding: 1px 8px; border-radius: 999px; }
-  .tag.live { background: #1e3a2c; color: var(--green); }
-  .tag.restart { background: #3a331e; color: var(--orange); }
-  .banner { padding: 8px 12px; border-radius: 10px; margin-bottom: 10px; display: none; }
+  .tag.live { background: #1a382b; color: var(--green); }
+  .tag.restart { background: #3d321d; color: var(--orange); }
+  .banner { padding: 8px 14px; border-radius: 10px; margin: 0 14px 10px; display: none; font-weight: 500; }
   .banner.show { display: block; }
-  .banner.info { background: #1e3a2c; color: var(--green); }
-  .banner.warn { background: #3a331e; color: var(--orange); }
-  #voices { display: flex; flex-direction: column; gap: 6px; }
-  .voice-item { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; background: var(--panel2); }
-  #memlist { max-height: 220px; overflow-y: auto; font-size: 12px; }
-  #memlist .m { margin-bottom: 4px; }
-  #memlist .m b { color: var(--accent); }
+  .banner.info { background: #1a382b; color: #9dfad0; border: 1px solid var(--green); }
+  .banner.warn { background: #3d321d; color: #ffd699; border: 1px solid var(--orange); }
+
+  /* 🎭 性格卡片 */
+  .persona-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .persona-card {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px; cursor: pointer; transition: all .15s ease; display: flex; flex-direction: column; gap: 4px;
+  }
+  .persona-card:hover { border-color: var(--accent); background: #302f3c; }
+  .persona-card.active { border-color: var(--accent); background: #3a2230; box-shadow: 0 0 10px var(--accent-glow); }
+  .persona-card b { font-size: 13px; color: #fff; }
+  .persona-card span { font-size: 11px; color: var(--dim); line-height: 1.4; }
+
+  /* ⏰ 提醒清單 */
+  #reminder-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+  .reminder-item {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 6px 10px; background: var(--panel2); border-radius: 8px; font-size: 12px;
+  }
+  .reminder-item .text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* 記憶列表 */
+  #memlist { max-height: 220px; overflow-y: auto; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .mem-item {
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 6px;
+    padding: 6px 8px; background: var(--panel2); border-radius: 8px; line-height: 1.4;
+  }
+  .mem-item .content { flex: 1; word-break: break-all; }
+  .mem-item b { color: var(--accent); }
 </style>
 </head>
 <body>
 <header>
-  <h1><span id="flower-name">花花</span> 控制台</h1>
-  <span id="state-badge" class="badge">連線中…</span>
-  <button id="btn-listen">暫停聆聽</button>
-  <button id="btn-restart">重啟</button>
+  <div class="header-left">
+    <h1>🌸 <span id="flower-name">花花</span> 控制台</h1>
+    <span id="state-badge" class="badge">連線中…</span>
+    <span id="metrics-badge" class="metrics-badge">ASR: -- ms | 首字: -- ms | 首音: -- ms</span>
+  </div>
+  <div class="header-right">
+    <button id="btn-poke" class="primary">戳戳花花 🌸</button>
+    <button id="btn-listen">暫停聆聽</button>
+    <button id="btn-restart">重啟管線</button>
+  </div>
 </header>
 <div class="banner" id="banner"></div>
 
 <main>
+  <!-- 左側主要區域：花花動態立繪與對話 -->
   <section class="panel">
-    <h2>對話</h2>
-    <div id="chat"><div class="mini">等待對話開始…</div></div>
-    <div class="row" style="margin-top:10px">
-      <input id="test-llm-text" placeholder="測試 LLM（不經過麥克風）" value="跟我說一句話">
-      <button class="primary" id="btn-test-llm">測試 LLM</button>
+    <div class="avatar-stage" id="avatar-stage" title="點擊花花可以跟她互動唷！">
+      <div class="speech-bubble" id="speech-bubble">「嗨～我是住在你桌上的花花！」</div>
+      <svg class="flower-svg-wrap" id="flower-svg" viewBox="0 0 140 160">
+        <!-- 莖與葉子 -->
+        <path d="M70,80 Q66,115 70,140" fill="none" stroke="#5cb878" stroke-width="6" stroke-linecap="round"/>
+        <path d="M70,110 Q50,105 45,115 Q60,120 70,115" fill="#5cb878"/>
+        <path d="M70,120 Q90,115 95,125 Q80,130 70,125" fill="#5cb878"/>
+        <!-- 花盆 -->
+        <polygon points="50,138 90,138 84,158 56,158" fill="#c47a53"/>
+        <ellipse cx="70" cy="138" rx="20" ry="4" fill="#df8c5f"/>
+        <!-- 花瓣組 -->
+        <g class="petal-group" id="petals">
+          <circle cx="70" cy="40" r="16" fill="#ff85aa"/>
+          <circle cx="96" cy="55" r="16" fill="#ff709b"/>
+          <circle cx="96" cy="85" r="16" fill="#ff85aa"/>
+          <circle cx="70" cy="100" r="16" fill="#ff709b"/>
+          <circle cx="44" cy="85" r="16" fill="#ff85aa"/>
+          <circle cx="44" cy="55" r="16" fill="#ff709b"/>
+        </g>
+        <!-- 花蕊臉龐 -->
+        <circle cx="70" cy="70" r="26" fill="#ffdd67"/>
+        <!-- 腮紅 -->
+        <circle cx="56" cy="74" r="5" fill="#ff9999" opacity="0.6"/>
+        <circle cx="84" cy="74" r="5" fill="#ff9999" opacity="0.6"/>
+        <!-- 眼睛 -->
+        <g class="flower-eye">
+          <ellipse cx="60" cy="67" rx="3.2" ry="4.5" fill="#332211"/>
+          <circle cx="59" cy="65" r="1.5" fill="#ffffff"/>
+          <ellipse cx="80" cy="67" rx="3.2" ry="4.5" fill="#332211"/>
+          <circle cx="79" cy="65" r="1.5" fill="#ffffff"/>
+        </g>
+        <!-- 嘴巴 -->
+        <path class="flower-mouth" id="flower-mouth" d="M64,76 Q70,82 76,76" fill="none" stroke="#773322" stroke-width="2.5" stroke-linecap="round"/>
+      </svg>
+      <div class="mini" style="margin-top:6px; color:#ffb3cc">點擊花花互動 🌸</div>
+    </div>
+
+    <h2>即時對話</h2>
+    <div id="chat"><div class="mini">等待對話開始…（對著 Volt 1 說話或在下方輸入測試）</div></div>
+    <div class="row" style="margin-top:12px">
+      <input id="test-llm-text" placeholder="文字發問（不經麥克風）" value="跟我說一句話">
+      <button class="primary" id="btn-test-llm">發送對話</button>
     </div>
     <div class="row">
-      <input id="test-tts-text" placeholder="測試語音" value="嗨，我準備好了。">
-      <button class="primary" id="btn-test-tts">測試語音</button>
+      <input id="test-tts-text" placeholder="文字朗讀（直接合成聲音）" value="嗨，我準備好了。">
+      <button class="primary" id="btn-test-tts">測試朗讀</button>
     </div>
   </section>
 
+  <!-- 右側控制面板 -->
   <aside>
+    <!-- 🎭 性格情境切換 -->
     <section class="panel">
-      <h2>音量計</h2>
+      <h2>🎭 性格與語氣切換</h2>
+      <div class="persona-cards" id="persona-cards"></div>
+    </section>
+
+    <!-- ⏰ 定時提醒 -->
+    <section class="panel">
+      <h2>⏰ 定時提醒事項</h2>
+      <div class="row">
+        <input id="reminder-text" placeholder="提醒內容（如：喝杯溫水）">
+      </div>
+      <div class="row">
+        <select id="reminder-time">
+          <option value="60">1 分鐘後</option>
+          <option value="300">5 分鐘後</option>
+          <option value="900">15 分鐘後</option>
+          <option value="1800">30 分鐘後</option>
+          <option value="3600">1 小時後</option>
+        </select>
+        <button class="primary" id="btn-add-reminder">設定提醒</button>
+      </div>
+      <div id="reminder-list"></div>
+    </section>
+
+    <!-- 音量計 -->
+    <section class="panel">
+      <h2>🎤 麥克風音量計</h2>
       <div class="meter"><div id="rms-bar"></div></div>
       <span class="mini" id="rms-text">rms 0.000 / 門檻 0.008</span>
     </section>
 
+    <!-- 聲音面板 -->
     <section class="panel">
-      <h2>聲音</h2>
+      <h2>🔊 聲音設定</h2>
       <div id="voice-panel" style="display:none">
         <div class="mini" style="margin-bottom:8px">CosyVoice 參考音色（切換後重啟 server，約 30～60 秒）</div>
         <div id="voices"></div>
@@ -124,9 +278,9 @@
           </div>
         </div>
         <div style="margin-top:10px">
-          <label>換聲線：上傳參考音檔（8～12 秒乾淨女聲 WAV，腔調會跟著參考音）</label>
+          <label>換聲線：上傳參考音檔（8～12 秒乾淨女聲 WAV）</label>
           <input type="file" id="voice-ref-file" accept=".wav,audio/wav,audio/x-wav">
-          <label style="margin-top:6px">逐字稿（與音檔內容一字不差）</label>
+          <label style="margin-top:6px">逐字稿（與音檔一字不差）</label>
           <textarea id="voice-ref-text" rows="2" placeholder="例如：今天天氣真好，我們一起出去走走吧。"></textarea>
           <div class="row" style="margin-top:6px">
             <button id="btn-voice-ref-apply">套用新聲線</button>
@@ -134,38 +288,44 @@
           </div>
         </div>
       </div>
-      <div id="voice-muted" class="mini">目前為 Kokoro 模式，音色在設定區調整。</div>
+      <div id="voice-muted" class="mini">目前為 Kokoro 快速模式（可在下方設定調整語速與音量）。</div>
     </section>
 
+    <!-- 回音校準 -->
     <section class="panel">
-      <h2>回音延遲校準</h2>
-      <div class="mini" style="margin-bottom:8px">校準會播放掃頻音並錄音，估計喇叭→麥克風延遲。進行時請保持安靜。</div>
+      <h2>📡 回音延遲校準</h2>
+      <div class="mini" style="margin-bottom:8px">播放掃頻音自動量測喇叭→麥克風延遲。進行時請保持安靜。</div>
       <div class="row">
         <button id="btn-calibrate">開始校準</button>
         <span class="mini" id="calibrate-result"></span>
       </div>
     </section>
 
+    <!-- 記憶面板 -->
     <section class="panel">
-      <h2>記憶</h2>
+      <h2>🧠 對話記憶管理</h2>
+      <div class="row">
+        <input id="mem-search" placeholder="搜尋歷史訊息…">
+        <button class="small" id="btn-mem-search">搜尋</button>
+      </div>
       <div class="row">
         <span class="mini" id="mem-count">—</span>
-        <button id="btn-mem-refresh">重新整理</button>
-        <button id="btn-mem-export">匯出</button>
-        <button class="danger" id="btn-mem-clear">清除</button>
+        <button class="small" id="btn-mem-refresh">重新整理</button>
+        <button class="small" id="btn-mem-export">匯出</button>
+        <button class="danger small" id="btn-mem-clear">清除全部</button>
       </div>
       <div id="memlist" style="display:none"></div>
     </section>
   </aside>
 </main>
 
-<section class="panel" style="margin: 0 12px 12px">
-  <h2>日誌</h2>
+<section class="panel" style="margin: 0 14px 14px">
+  <h2>📜 即時日誌</h2>
   <div id="logs">連線中…</div>
 </section>
 
-<section class="panel" style="margin: 0 12px 12px">
-  <h2>設定</h2>
+<section class="panel" style="margin: 0 14px 14px">
+  <h2>⚙️ 完整設定表單</h2>
   <div id="settings"></div>
   <div class="row" style="margin-top: 12px">
     <button class="primary" id="btn-settings-save" style="flex:0 0 auto">儲存設定</button>
@@ -181,6 +341,14 @@ let state = "等待說話";
 let flowerBlock = null;
 let settingsData = [];
 
+function esc(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function banner(text, kind, ms = 5000) {
   const b = $("banner");
   b.textContent = text;
@@ -192,7 +360,15 @@ function setState(s) {
   state = s;
   const badge = $("state-badge");
   badge.textContent = s;
-  badge.className = "badge " + (s.includes("說話中") ? "speaking" : s.includes("正在聽") ? "listening" : s.includes("思考") || s.includes("辨識") ? "thinking" : "");
+  badge.className = "badge " + (s.includes("說話") ? "speaking" : s.includes("正在聽") ? "listening" : s.includes("思考") || s.includes("辨識") ? "thinking" : "");
+  const stage = $("avatar-stage");
+  if (s.includes("說話")) {
+    stage.classList.add("speaking");
+    $("flower-mouth").setAttribute("d", "M60,76 Q70,90 80,76 Q70,82 60,76");
+  } else {
+    stage.classList.remove("speaking");
+    $("flower-mouth").setAttribute("d", "M64,76 Q70,82 76,76");
+  }
 }
 
 function appendMsg(role, text) {
@@ -205,6 +381,9 @@ function appendMsg(role, text) {
   el.textContent = text;
   chat.appendChild(el);
   chat.scrollTop = chat.scrollHeight;
+  if (role === "flower") {
+    $("speech-bubble").textContent = "「" + text.slice(0, 36) + (text.length > 36 ? "…」" : "」");
+  }
   return el;
 }
 
@@ -217,6 +396,13 @@ function appendLog(message, isError) {
   logs.appendChild(line);
   while (logs.children.length > 300) logs.removeChild(logs.firstChild);
   logs.scrollTop = logs.scrollHeight;
+}
+
+function triggerPokeAnimation() {
+  const svg = $("flower-svg");
+  svg.classList.remove("flower-poked");
+  void svg.offsetWidth;
+  svg.classList.add("flower-poked");
 }
 
 function handleEvent(evt) {
@@ -235,7 +421,26 @@ function handleEvent(evt) {
     case "flower_delta":
       if (!flowerBlock) flowerBlock = appendMsg("flower", "");
       flowerBlock.textContent += evt.text;
+      $("speech-bubble").textContent = "「" + flowerBlock.textContent.slice(0, 36) + "…」";
       $("chat").scrollTop = $("chat").scrollHeight;
+      break;
+    case "metrics":
+      $("metrics-badge").textContent = `ASR: ${evt.asr_ms || 0}ms | 首字: ${evt.ttft_ms || 0}ms | 首音: ${evt.ttfa_ms || 0}ms | 總: ${evt.total_turn_ms || 0}ms`;
+      break;
+    case "poke":
+      triggerPokeAnimation();
+      $("speech-bubble").textContent = "「" + evt.text + "」";
+      break;
+    case "reminder":
+      banner("⏰ 提醒時間到：" + evt.text, "warn", 10000);
+      renderReminders();
+      break;
+    case "reminder_added":
+      renderReminders();
+      break;
+    case "persona_changed":
+      banner(`已切換性格至「${evt.name}」🌸`, "info");
+      renderPersonas();
       break;
     case "log":
       appendLog(evt.message);
@@ -280,6 +485,13 @@ async function post(path, body) {
 }
 
 async function get(path) { return (await fetch(path)).json(); }
+async function del(path) { return (await fetch(path, { method: "DELETE" })).json(); }
+
+$("avatar-stage").onclick = async () => {
+  triggerPokeAnimation();
+  await post("/api/action", { action: "poke" });
+};
+$("btn-poke").onclick = $("avatar-stage").onclick;
 
 $("btn-listen").onclick = async () => {
   const paused = $("btn-listen").textContent.includes("恢復");
@@ -288,7 +500,7 @@ $("btn-listen").onclick = async () => {
 };
 
 $("btn-restart").onclick = async () => {
-  banner("正在要求重啟…", "info");
+  banner("正在要求重啟管線…", "info");
   await post("/api/action", { action: "restart" });
 };
 
@@ -302,19 +514,68 @@ $("btn-test-llm").onclick = async () => {
   if (!res.ok) banner(res.reason || "測試失敗", "warn");
 };
 
+/* ---------- 🎭 性格卡片 ---------- */
+async function renderPersonas() {
+  const data = await get("/api/personas");
+  const wrap = $("persona-cards");
+  wrap.innerHTML = "";
+  data.personas.forEach((p) => {
+    const card = document.createElement("div");
+    card.className = "persona-card" + (data.active === p.id ? " active" : "");
+    card.innerHTML = `<b>${esc(p.tag)}</b><span>${esc(p.description)}</span>`;
+    card.onclick = async () => {
+      await post("/api/personas/select", { id: p.id });
+    };
+    wrap.appendChild(card);
+  });
+}
+
+/* ---------- ⏰ 提醒事項 ---------- */
+async function renderReminders() {
+  const data = await get("/api/reminders");
+  const wrap = $("reminder-list");
+  wrap.innerHTML = "";
+  if (!data.reminders || !data.reminders.length) {
+    wrap.innerHTML = '<div class="mini" style="padding:4px 0">尚無排程中的提醒</div>';
+    return;
+  }
+  data.reminders.forEach((r) => {
+    const el = document.createElement("div");
+    el.className = "reminder-item";
+    const minutes = Math.max(1, Math.round(r.due_in_s / 60));
+    el.innerHTML = `
+      <span class="text">📌 ${esc(r.text)}</span>
+      <span class="mini" style="color:var(--orange)">約 ${minutes} 分鐘後</span>
+      <button class="danger small" style="padding:1px 6px">✕</button>
+    `;
+    el.querySelector("button").onclick = async (e) => {
+      e.stopPropagation();
+      await del(`/api/reminders/${r.id}`);
+      renderReminders();
+    };
+    wrap.appendChild(el);
+  });
+}
+
+$("btn-add-reminder").onclick = async () => {
+  const text = $("reminder-text").value.trim();
+  const in_seconds = Number($("reminder-time").value);
+  if (!text) { banner("請輸入提醒內容", "warn"); return; }
+  const res = await post("/api/reminders", { text, in_seconds });
+  if (res.ok) {
+    $("reminder-text").value = "";
+    banner("已設定提醒事項！", "info");
+    renderReminders();
+  } else {
+    banner(res.reason || "設定失敗", "warn");
+  }
+};
+
 /* ---------- 設定表單 ---------- */
 const SECTION_NAMES = {
   app: "應用程式", audio: "音訊", aec: "回音消除", interaction: "互動",
   idle_chat: "主動碎碎念", vad: "語音偵測", asr: "語音辨識", llm: "大腦", tts: "聲音",
 };
-
-function esc(value) {
-  return String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
 
 function fieldInput(spec) {
   const name = "f-" + spec.path;
@@ -425,9 +686,8 @@ async function renderVoiceRef() {
     const prefix = data.prompt_file && data.prompt_file.includes("candidates") ? "候選音色" : "自訂音檔";
     $("voice-ref-current").textContent = `${prefix}：${data.name}`;
     if (data.prompt_text) $("voice-ref-text").value = data.prompt_text;
-  } catch (e) { /* server 可能沒起來 */ }
+  } catch (e) { }
 }
-renderVoiceRef();
 
 let voiceRefDataUrl = null;
 $("voice-ref-file").onchange = (ev) => {
@@ -458,17 +718,40 @@ $("btn-voice-ref-apply").onclick = async () => {
   }
 };
 
-/* ---------- 記憶 ---------- */
+/* ---------- 記憶管理 ---------- */
 let memVisible = false;
-$("btn-mem-refresh").onclick = async () => {
-  const data = await get("/api/memory");
+async function refreshMemory(keyword = "") {
+  const url = keyword ? `/api/memory/search?q=${encodeURIComponent(keyword)}` : "/api/memory";
+  const data = await get(url);
   $("mem-count").textContent = `${data.messages.length} 則訊息`;
   const wrap = $("memlist");
   if (!memVisible) { wrap.style.display = ""; memVisible = true; }
-  wrap.innerHTML = data.messages.map((m) =>
-    `<div class="m"><b>${m.role === "user" ? "你" : "花花"}</b> ${m.content}</div>`).join("");
-  if (!data.messages.length) wrap.innerHTML = '<div class="mini">（空的）</div>';
-};
+  wrap.innerHTML = "";
+  if (!data.messages.length) {
+    wrap.innerHTML = '<div class="mini">（無相符對話紀錄）</div>';
+    return;
+  }
+  data.messages.forEach((m) => {
+    const item = document.createElement("div");
+    item.className = "mem-item";
+    item.innerHTML = `
+      <div class="content"><b>${m.role === "user" ? "你" : "花花"}</b> ${esc(m.content)}</div>
+      ${m.id ? `<button class="danger small" style="padding:1px 5px">✕</button>` : ""}
+    `;
+    if (m.id) {
+      item.querySelector("button").onclick = async () => {
+        await del(`/api/memory/${m.id}`);
+        refreshMemory($("mem-search").value);
+      };
+    }
+    wrap.appendChild(item);
+  });
+}
+
+$("btn-mem-refresh").onclick = () => refreshMemory($("mem-search").value);
+$("btn-mem-search").onclick = () => refreshMemory($("mem-search").value);
+$("mem-search").onkeyup = (e) => { if (e.key === "Enter") refreshMemory($("mem-search").value); };
+
 $("btn-mem-export").onclick = async () => {
   const res = await post("/api/action", { action: "export_memory" });
   if (!res.ok) return;
@@ -479,6 +762,7 @@ $("btn-mem-export").onclick = async () => {
   a.click();
   URL.revokeObjectURL(a.href);
 };
+
 $("btn-mem-clear").onclick = async () => {
   if (!confirm("確定清除所有對話記憶？")) return;
   const res = await post("/api/action", { action: "clear_memory" });
@@ -497,8 +781,11 @@ async function init() {
   connect();
   await renderSettings();
   await renderVoices();
-  $("btn-mem-refresh").click();
-  setInterval($("btn-mem-refresh").click, 30000);
+  await renderPersonas();
+  await renderReminders();
+  await renderVoiceRef();
+  refreshMemory();
+  setInterval(() => { refreshMemory($("mem-search").value); renderReminders(); }, 30000);
 }
 init();
 </script>
