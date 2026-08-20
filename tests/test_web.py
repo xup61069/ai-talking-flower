@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 import httpx
 from httpx import ASGITransport
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from talking_flower.bus import RuntimeControl, StatusBus
 from talking_flower.settings import LiveSettings, SettingsStore
@@ -18,8 +21,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 class WebApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._temp = tempfile.TemporaryDirectory()
-        store = SettingsStore(PROJECT_ROOT / "config.toml")
-        store.settings_path = Path(self._temp.name) / "settings.json"
+        store = SettingsStore(
+            PROJECT_ROOT / "config.toml",
+            settings_path=Path(self._temp.name) / "settings.json",
+        )
         live = LiveSettings(store)
         bus = StatusBus()
         runtime = RuntimeControl()
@@ -99,13 +104,20 @@ class WebApiTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.post("/api/action", json={"action": "unknown_xyz"})
         self.assertEqual(response.status_code, 400)
 
+    async def test_test_tts_rejected_while_manual_busy(self) -> None:
+        self.ctx.live.manual_busy = True
+        response = await self.client.post("/api/action", json={"action": "test_tts"})
+        self.assertFalse(response.json()["ok"])
+
     async def test_voice_ref_roundtrip(self) -> None:
         temp = tempfile.TemporaryDirectory()
         try:
             config = Path(temp.name) / "config.toml"
             config.write_bytes((PROJECT_ROOT / "config.toml").read_bytes())
-            store = SettingsStore(config)
-            store.settings_path = Path(temp.name) / "settings.json"
+            store = SettingsStore(
+                config,
+                settings_path=Path(temp.name) / "settings.json",
+            )
             live = LiveSettings(store)
             bus = StatusBus()
             runtime = RuntimeControl()

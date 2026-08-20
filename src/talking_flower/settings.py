@@ -107,10 +107,14 @@ def get_path(source: dict, path: str) -> object:
 class SettingsStore:
     """config.toml 當基底，UI 修改存到 data/settings.json 覆蓋。"""
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, settings_path: Path | None = None) -> None:
         self.config_path = config_path.resolve()
         self.project_root = self.config_path.parent
-        self.settings_path = self.project_root / "data" / "settings.json"
+        self.settings_path = (
+            Path(settings_path).resolve()
+            if settings_path is not None
+            else self.project_root / "data" / "settings.json"
+        )
         self._base = self._read_toml()
         self._overrides: dict[str, object] = {}
         self._load_overrides()
@@ -134,7 +138,10 @@ class SettingsStore:
             return
         for path, value in raw.items():
             if path in SPEC_BY_PATH:
-                self._overrides[path] = value
+                try:
+                    self._overrides[path] = _coerce(SPEC_BY_PATH[path], value)
+                except (TypeError, ValueError) as error:
+                    LOGGER.warning("忽略無效的設定 %s=%r：%s", path, value, error)
 
     def merged_raw(self) -> dict:
         raw = deepcopy(self._base)
@@ -185,19 +192,36 @@ class SettingsStore:
 
 
 def _coerce(spec: SettingSpec, value: object) -> object:
+    if value is None:
+        raise ValueError("值不能是 null")
     if spec.kind == "bool":
         if isinstance(value, bool):
             return value
         return str(value).lower() in {"1", "true", "yes", "on"}
     if spec.kind == "int":
-        return int(value)
+        return _clamp(spec, int(value))
     if spec.kind == "float":
-        return float(value)
+        return _clamp(spec, float(value))
     if spec.kind == "text" or spec.kind == "str":
-        return str(value)
+        text = str(value)
+        if text.strip().casefold() in {"null", "none"}:
+            raise ValueError("值不能是 null")
+        return text
     if spec.kind == "choice":
-        return str(value)
+        text = str(value)
+        if spec.options is not None and text not in spec.options:
+            allowed = "、".join(spec.options)
+            raise ValueError(f"必須是 {allowed} 其中之一")
+        return text
     return value
+
+
+def _clamp(spec: SettingSpec, number: int | float) -> int | float:
+    if spec.minimum is not None:
+        number = max(number, spec.minimum)
+    if spec.maximum is not None:
+        number = min(number, spec.maximum)
+    return number
 
 
 class LiveSettings:
@@ -205,6 +229,7 @@ class LiveSettings:
 
     def __init__(self, store: SettingsStore) -> None:
         config = store.load_config()
+        self.name: str = config.app.name
         self.volume: int = config.tts.volume
         self.speed: float = config.tts.speed
         self.temperature: float = config.llm.temperature
@@ -217,8 +242,10 @@ class LiveSettings:
         self.idle_chat_timeout_s: float = config.idle_chat.timeout_s
         self.idle_chat_prompt: str = config.idle_chat.prompt
         self.listening: bool = True
+        self.manual_busy: bool = False
 
     LIVE_PATHS: dict[str, str] = {
+        "app.name": "name",
         "tts.volume": "volume",
         "tts.speed": "speed",
         "llm.temperature": "temperature",

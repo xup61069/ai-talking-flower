@@ -144,7 +144,9 @@ class WebServer:
             name = payload.get("action")
             if name in {"test_tts", "test_llm"}:
                 controller = ctx.controller
-                if controller is None or controller._turn_task is not None:
+                if ctx.live.manual_busy or (
+                    controller is not None and controller._turn_task is not None
+                ):
                     return {"ok": False, "reason": "花花正在忙，請等一下"}
             if name == "pause":
                 ctx.live.listening = False
@@ -156,16 +158,20 @@ class WebServer:
                 return {"ok": True}
             if name == "test_tts":
                 text = str(payload.get("text") or "嗨，我準備好了。")
+                ctx.live.manual_busy = True
                 asyncio.create_task(self._run_test_tts(text))
                 return {"ok": True}
             if name == "test_llm":
                 text = str(payload.get("text") or "跟我說一句話")
                 speak = bool(payload.get("speak", True))
+                ctx.live.manual_busy = True
                 asyncio.create_task(self._run_test_llm(text, speak))
                 return {"ok": True}
             if name == "clear_memory":
                 if ctx.memory is not None:
                     ctx.memory.clear()
+                if ctx.controller is not None:
+                    ctx.controller.clear_summary()
                 return {"ok": True}
             if name == "export_memory":
                 if ctx.memory is None:
@@ -359,25 +365,28 @@ class WebServer:
 
     async def _run_test_tts(self, text: str) -> None:
         controller = self.ctx.controller
-        if controller is None:
-            return
-        tts = controller.tts
         try:
+            if controller is None:
+                return
+            tts = controller.tts
             await tts.begin_turn()
             await tts.speak(text)
         except Exception:
             LOGGER.exception("測試語音失敗")
         finally:
-            await tts.end_turn()
+            self.ctx.live.manual_busy = False
+            if controller is not None:
+                await controller.tts.end_turn()
 
     async def _run_test_llm(self, text: str, speak: bool) -> None:
         controller = self.ctx.controller
-        if controller is None:
-            return
         try:
-            await controller.text_turn(text, speak=speak)
+            if controller is not None:
+                await controller.text_turn(text, speak=speak)
         except Exception:
             LOGGER.exception("測試 LLM 失敗")
+        finally:
+            self.ctx.live.manual_busy = False
 
     async def _hot_swap_speaker(self) -> bool:
         base_url = str(self.ctx.store.value("tts.base_url")).rstrip("/")

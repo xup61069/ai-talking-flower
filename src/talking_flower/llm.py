@@ -17,9 +17,12 @@ class LlamaCppClient:
         await self._client.aclose()
 
     async def health(self) -> bool:
-        base = self.config.base_url.removesuffix("/v1").rstrip("/")
-        response = await self._client.get(f"{base}/health")
-        return response.status_code == 200 and response.json().get("status") == "ok"
+        try:
+            base = self.config.base_url.removesuffix("/v1").rstrip("/")
+            response = await self._client.get(f"{base}/health")
+            return response.status_code == 200 and response.json().get("status") == "ok"
+        except (httpx.HTTPError, ValueError):
+            return False
 
     async def _complete(
         self,

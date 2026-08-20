@@ -150,7 +150,6 @@ delay_ms = 90
 ## 本機測試
 
 ```powershell
-$env:PYTHONPATH = "$PWD/src"
 python -m unittest discover -s tests -v
 ```
 

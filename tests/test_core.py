@@ -2,16 +2,20 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from talking_flower.asr import normalize_transcript
 from talking_flower.aec import create_echo_canceller
 from talking_flower.config import load_config
 from talking_flower.llm import SpeechChunker
 from talking_flower.memory import ConversationMemory
+from talking_flower.tts import clean_speech_text
 from talking_flower.vad import UtteranceSegmenter
 
 
@@ -21,6 +25,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 class AsrTests(unittest.TestCase):
     def test_normalizes_to_traditional_chinese(self) -> None:
         self.assertEqual(normalize_transcript("欢迎大家来体验"), "歡迎大家來體驗")
+
+
+class TtsCleanTests(unittest.TestCase):
+    def test_strips_markdown_and_emojis_and_stage_actions(self) -> None:
+        raw = "**花花**：今天天氣好棒🌸！（微笑）`隨機代碼` 一起出去走走吧！😊"
+        expected = "花花：今天天氣好棒！隨機代碼 一起出去走走吧！"
+        self.assertEqual(clean_speech_text(raw), expected)
+
+    def test_strips_lists_and_headings(self) -> None:
+        raw = "### 早安\n- 第一件事\n* 第二件事\n【調皮笑】"
+        expected = "早安\n第一件事\n第二件事"
+        self.assertEqual(clean_speech_text(raw), expected)
+
+    def test_handles_empty_or_whitespace(self) -> None:
+        self.assertEqual(clean_speech_text(""), "")
+        self.assertEqual(clean_speech_text("   \n\t  "), "")
+
 
 
 class ConfigTests(unittest.TestCase):

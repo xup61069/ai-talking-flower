@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
+import httpx
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from talking_flower.bus import RestartRequired, RuntimeControl, StatusBus
 from talking_flower.config import load_config
+from talking_flower.controller import FlowerController
+from talking_flower.llm import LlamaCppClient
 from talking_flower.memory import ConversationMemory
 from talking_flower.settings import LiveSettings, SettingsStore, set_path
 
@@ -18,8 +26,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 class SettingsStoreTests(unittest.TestCase):
     def test_merge_with_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = SettingsStore(PROJECT_ROOT / "config.toml")
-            store.settings_path = Path(directory) / "settings.json"
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=Path(directory) / "settings.json",
+            )
             store.set("tts.volume", 55)
             store.set("llm.temperature", 1.2)
             config = store.load_config()
@@ -28,6 +38,45 @@ class SettingsStoreTests(unittest.TestCase):
             self.assertEqual(config.tts.backend, "kokoro")
             self.assertEqual(store.value("tts.volume"), 55)
             self.assertTrue(store.settings_path.is_file())
+
+    def test_invalid_override_ignored_and_numbers_clamped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "llm.base_url": "null",
+                        "tts.backend": "bogus",
+                        "tts.volume": 999,
+                        "llm.temperature": 5.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=settings_path,
+            )
+            config = store.load_config()
+            self.assertEqual(config.llm.base_url, "http://127.0.0.1:8080/v1")
+            self.assertEqual(config.tts.backend, "kokoro")
+            self.assertEqual(config.tts.volume, 100)
+            self.assertEqual(config.llm.temperature, 2.0)
+
+    def test_invalid_values_rejected_and_clamped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=Path(directory) / "settings.json",
+            )
+            with self.assertRaises(ValueError):
+                store.set("tts.backend", "bogus")
+            with self.assertRaises(ValueError):
+                store.set("llm.persona", None)
+            with self.assertRaises(ValueError):
+                store.set("llm.base_url", "null")
+            store.set("tts.volume", 300)
+            self.assertEqual(store.value("tts.volume"), 100)
 
     def test_persona_comes_from_config(self) -> None:
         config = load_config(PROJECT_ROOT / "config.toml")
@@ -40,13 +89,27 @@ class SettingsStoreTests(unittest.TestCase):
 
     def test_live_settings_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = SettingsStore(PROJECT_ROOT / "config.toml")
-            store.settings_path = Path(directory) / "settings.json"
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=Path(directory) / "settings.json",
+            )
             live = LiveSettings(store)
             self.assertEqual(live.volume, 100)
             self.assertTrue(live.set("tts.volume", 70))
             self.assertEqual(live.volume, 70)
             self.assertFalse(live.set("tts.backend", "cosyvoice"))
+
+    def test_live_name_and_manual_busy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=Path(directory) / "settings.json",
+            )
+            live = LiveSettings(store)
+            self.assertEqual(live.name, "花花")
+            self.assertFalse(live.manual_busy)
+            self.assertTrue(live.set("app.name", "小花"))
+            self.assertEqual(live.name, "小花")
 
     def test_set_path(self) -> None:
         target: dict = {}
@@ -88,5 +151,48 @@ class MemoryTests(unittest.TestCase):
             memory.close()
 
 
+class LlmHealthTests(unittest.IsolatedAsyncioTestCase):
+    async def test_health_returns_false_on_connection_error(self) -> None:
+        config = load_config(PROJECT_ROOT / "config.toml")
+        client = LlamaCppClient(config.llm)
+        request = httpx.Request("GET", client.config.base_url)
+        try:
+            with mock.patch.object(
+                client._client,
+                "get",
+                new=mock.AsyncMock(
+                    side_effect=httpx.ConnectError("down", request=request)
+                ),
+            ):
+                self.assertFalse(await client.health())
+        finally:
+            await client.close()
+
+
+class ControllerSummaryTests(unittest.TestCase):
+    def test_persona_retains_summary_cache_and_clears(self) -> None:
+        config = load_config(PROJECT_ROOT / "config.toml")
+        controller = FlowerController(
+            config=config,
+            asr=mock.MagicMock(),
+            llm=mock.MagicMock(),
+            tts=mock.MagicMock(),
+            memory=mock.MagicMock(),
+            aec=mock.MagicMock(),
+        )
+        base_persona = controller._persona_with_summary()
+        self.assertNotIn("背景（較早的對話摘要）", base_persona)
+
+        controller._summary_cache = "使用者喜歡喝烏龍茶。"
+        persona_with_cache = controller._persona_with_summary()
+        self.assertIn("背景（較早的對話摘要）：\n使用者喜歡喝烏龍茶。", persona_with_cache)
+
+        controller.clear_summary()
+        self.assertEqual(controller._summary_cache, "")
+        self.assertEqual(controller._summary_count, 0)
+        self.assertNotIn("背景（較早的對話摘要）", controller._persona_with_summary())
+
+
 if __name__ == "__main__":
     unittest.main()
+

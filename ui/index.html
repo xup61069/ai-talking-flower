@@ -308,23 +308,33 @@ const SECTION_NAMES = {
   idle_chat: "主動碎碎念", vad: "語音偵測", asr: "語音辨識", llm: "大腦", tts: "聲音",
 };
 
+function esc(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function fieldInput(spec) {
   const name = "f-" + spec.path;
   if (spec.kind === "bool") {
-    return `<label><input type="checkbox" id="${name}" data-path="${spec.path}" ${spec.value ? "checked" : ""}> ${spec.label}</label>`;
+    return `<label><input type="checkbox" id="${name}" data-path="${spec.path}" ${spec.value ? "checked" : ""}> ${esc(spec.label)}</label>`;
   }
   let input;
   if (spec.kind === "choice") {
     input = `<select id="${name}" data-path="${spec.path}">` +
-      spec.options.map((o) => `<option value="${o}" ${String(o) === String(spec.value) ? "selected" : ""}>${o}</option>`).join("") +
+      spec.options.map((o) => `<option value="${esc(o)}" ${String(o) === String(spec.value) ? "selected" : ""}>${esc(o)}</option>`).join("") +
       "</select>";
   } else if (spec.kind === "text") {
-    input = `<textarea id="${name}" data-path="${spec.path}" rows="3">${String(spec.value).replace(/&/g, "&amp;").replace(/</g, "&lt;")}</textarea>`;
+    input = `<textarea id="${name}" data-path="${spec.path}" rows="3">${esc(spec.value)}</textarea>`;
+  } else if (spec.kind === "str") {
+    input = `<input type="text" id="${name}" data-path="${spec.path}" value="${esc(spec.value)}">`;
   } else {
     const attrs = `min="${spec.minimum}" max="${spec.maximum}" step="${spec.step}"`;
-    input = `<input type="number" id="${name}" data-path="${spec.path}" value="${spec.value}" ${attrs}>`;
+    input = `<input type="number" id="${name}" data-path="${spec.path}" value="${esc(spec.value)}" ${attrs}>`;
   }
-  return `<div class="field"><label>${spec.label} <span class="tag ${spec.apply}">${spec.apply === "live" ? "即時" : "需重啟"}</span></label>${input}</div>`;
+  return `<div class="field"><label>${esc(spec.label)} <span class="tag ${spec.apply}">${spec.apply === "live" ? "即時" : "需重啟"}</span></label>${input}</div>`;
 }
 
 async function renderSettings() {
@@ -355,7 +365,10 @@ $("btn-settings-save").onclick = async () => {
   const paths = {};
   document.querySelectorAll("[data-path]").forEach((el) => {
     if (el.type === "checkbox") paths[el.dataset.path] = el.checked;
-    else if (el.type === "number") paths[el.dataset.path] = el.value === "" ? el.min : Number(el.value);
+    else if (el.type === "number") {
+      const value = Number(el.value);
+      if (Number.isFinite(value)) paths[el.dataset.path] = value;
+    }
     else paths[el.dataset.path] = el.value;
   });
   const res = await (await fetch("/api/settings", {

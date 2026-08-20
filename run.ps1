@@ -7,12 +7,28 @@ $env:PYTHONPATH = Join-Path $projectRoot 'src'
 $env:PYTHONUTF8 = '1'
 Set-Location -LiteralPath $projectRoot
 
-$usesCosyVoice = Select-String -LiteralPath (Join-Path $projectRoot 'config.toml') -Pattern '^backend\s*=\s*"cosyvoice"' -Quiet
-$usesKokoro = Select-String -LiteralPath (Join-Path $projectRoot 'config.toml') -Pattern '^backend\s*=\s*"kokoro"' -Quiet
-if ($usesKokoro) {
+$backend = ''
+$settingsJson = Join-Path $projectRoot 'data\settings.json'
+if (Test-Path -LiteralPath $settingsJson) {
+    try {
+        $settings = Get-Content -LiteralPath $settingsJson -Raw -Encoding utf8 | ConvertFrom-Json
+        $override = [string]$settings.'tts.backend'
+        if ($override -in @('kokoro', 'cosyvoice')) { $backend = $override }
+    }
+    catch { }
+}
+if (-not $backend) {
+    if (Select-String -LiteralPath (Join-Path $projectRoot 'config.toml') -Pattern '^backend\s*=\s*"kokoro"' -Quiet) {
+        $backend = 'kokoro'
+    }
+    elseif (Select-String -LiteralPath (Join-Path $projectRoot 'config.toml') -Pattern '^backend\s*=\s*"cosyvoice"' -Quiet) {
+        $backend = 'cosyvoice'
+    }
+}
+if ($backend -eq 'kokoro') {
     & (Join-Path $projectRoot 'start-kokoro.ps1')
 }
-elseif ($usesCosyVoice) {
+elseif ($backend -eq 'cosyvoice') {
     & (Join-Path $projectRoot 'start-cosyvoice.ps1')
 }
 

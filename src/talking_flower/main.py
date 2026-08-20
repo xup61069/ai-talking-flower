@@ -76,11 +76,15 @@ def build_controller(
 
 async def check(config: Config, *, load_asr: bool) -> int:
     print("設定檔：OK")
-    index = resolve_device(
-        config.audio.input_device,
-        config.audio.input_hostapi,
-        input_device=True,
-    )
+    try:
+        index = resolve_device(
+            config.audio.input_device,
+            config.audio.input_hostapi,
+            input_device=True,
+        )
+    except Exception as error:
+        print(f"麥克風：找不到（{error}）")
+        return 1
     print(f"麥克風：OK（裝置 {index}，{config.audio.input_device}）")
     llm = LlamaCppClient(config.llm)
     try:
@@ -90,7 +94,11 @@ async def check(config: Config, *, load_asr: bool) -> int:
     print(f"llama-server：{'OK' if healthy else '無法連線'}")
     if not healthy:
         return 1
-    tts = create_tts(config.tts, config.audio)
+    try:
+        tts = create_tts(config.tts, config.audio)
+    except (RuntimeError, ValueError) as error:
+        print(f"TTS：{error}")
+        return 1
     try:
         tts_healthy = await tts.health()
     finally:
@@ -101,7 +109,15 @@ async def check(config: Config, *, load_asr: bool) -> int:
     print(f"{label}：{'OK' if tts_healthy else '無法連線'}")
     if not tts_healthy:
         return 1
-    aec = create_echo_canceller(config.aec, config.audio.sample_rate, config.project_root)
+    try:
+        aec = create_echo_canceller(
+            config.aec,
+            config.audio.sample_rate,
+            config.project_root,
+        )
+    except Exception as error:
+        print(f"WebRTC AEC3：{error}")
+        return 1
     try:
         frame_size = config.audio.sample_rate * config.audio.block_ms // 1000
         processed = aec.process_capture(np.zeros(frame_size, dtype=np.float32))

@@ -123,7 +123,7 @@ class FlowerController:
                     audio.drain()
                     self._set_state(State.IDLE)
 
-                if self.live is not None and not self.live.listening:
+                if self.live is not None and (not self.live.listening or self.live.manual_busy):
                     continue
 
                 # 主動碎碎念：安靜超過 timeout 就主動說一句。
@@ -206,10 +206,13 @@ class FlowerController:
             return self.live.recent_turns
         return self.config.llm.recent_turns
 
-    def _persona_with_summary(self, *, refresh_summary: bool) -> str:
+    def clear_summary(self) -> None:
+        """清空舊對話摘要快取。"""
+        self._summary_cache = ""
+        self._summary_count = 0
+
+    def _persona_with_summary(self) -> str:
         persona = (self.live.persona if self.live is not None else "") or self.config.llm.persona
-        if not refresh_summary:
-            return persona
         if not self._summary_cache:
             return persona
         return persona + "\n\n背景（較早的對話摘要）：\n" + self._summary_cache
@@ -219,7 +222,6 @@ class FlowerController:
         if self.bus is not None and source == "user":
             self.bus.publish({"type": "user_text", "text": user_text})
 
-        refresh_summary = False
         if source == "user":
             count = self.memory.count()
             if count > self._recent_turns * 2 and count - self._summary_count >= 8:
@@ -227,10 +229,9 @@ class FlowerController:
                 if summary:
                     self._summary_cache = summary
                     LOGGER.info("已建立較早對話摘要（%d 字）", len(summary))
-                    refresh_summary = True
                 self._summary_count = count
 
-        persona = self._persona_with_summary(refresh_summary=refresh_summary)
+        persona = self._persona_with_summary()
 
         response_parts: list[str] = []
         chunker = SpeechChunker()
@@ -303,5 +304,6 @@ class FlowerController:
             LOGGER.info("沒有辨識到文字")
             return
         self._last_activity = time.monotonic()
-        print(f"\n你：{text}\n{self.config.app.name}：", end="", flush=True)
+        name = self._live_value("name", self.config.app.name)
+        print(f"\n你：{text}\n{name}：", end="", flush=True)
         await self.text_turn(text, speak=True)

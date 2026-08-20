@@ -6,6 +6,7 @@ import logging
 import os
 import queue
 import threading
+import re
 from typing import Protocol
 
 import httpx
@@ -20,6 +21,34 @@ from .settings import LiveSettings
 
 
 LOGGER = logging.getLogger(__name__)
+
+EMOJI_PATTERN = re.compile(
+    r"[\U0001F300-\U0001FAFF\u2600-\u26FF\u2700-\u27BF]+",
+    flags=re.UNICODE,
+)
+
+
+def clean_speech_text(text: str) -> str:
+    """過濾 Markdown 標記、Emoji、舞臺動作指示，回傳適合直接朗讀的純文字。"""
+    if not text:
+        return ""
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"\*([^*]+)\*", r"\1", text)
+    text = re.sub(r"~~([^~]+)~~", r"\1", text)
+    text = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"（[^）]+）", "", text)
+    text = re.sub(r"\([^)]*\)", "", text)
+    text = re.sub(r"【[^】]*】", "", text)
+    text = re.sub(r"\[[^\]]*\]", "", text)
+    text = EMOJI_PATTERN.sub("", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{2,}", "\n", text)
+    return text.strip()
+
 
 
 class TextToSpeech(Protocol):
@@ -61,10 +90,11 @@ class WindowsSapiTTS:
         voice.Speak(text)
 
     async def speak(self, text: str) -> None:
-        if not text.strip():
+        cleaned = clean_speech_text(text)
+        if not cleaned.strip():
             return
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self._speak_sync, text)
+        await loop.run_in_executor(self._executor, self._speak_sync, cleaned)
 
     async def health(self) -> bool:
         return True
@@ -272,7 +302,8 @@ class HttpPcmTTS:
             player.abort()
 
     async def speak(self, text: str) -> None:
-        if not text.strip():
+        cleaned = clean_speech_text(text)
+        if not cleaned.strip():
             return
 
         owned: _PcmPlayer | None = None
@@ -281,7 +312,7 @@ class HttpPcmTTS:
         blend_samples = 480
         blend_carry: np.ndarray | None = None
         try:
-            request_text = self._converter.convert(text) if self._converter is not None else text
+            request_text = self._converter.convert(cleaned) if self._converter is not None else cleaned
             speed = self.live.speed if self.live is not None else self.config.speed
             async with self._client.stream(
                 "POST",
