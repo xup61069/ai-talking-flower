@@ -30,13 +30,21 @@ class AsrTests(unittest.TestCase):
 class TtsCleanTests(unittest.TestCase):
     def test_strips_markdown_and_emojis_and_stage_actions(self) -> None:
         raw = "**花花**：今天天氣好棒🌸！（微笑）`隨機代碼` 一起出去走走吧！😊"
-        expected = "花花：今天天氣好棒！隨機代碼 一起出去走走吧！"
+        expected = "今天天氣好棒！隨機代碼 一起出去走走吧！"
         self.assertEqual(clean_speech_text(raw), expected)
 
     def test_strips_lists_and_headings(self) -> None:
         raw = "### 早安\n- 第一件事\n* 第二件事\n【調皮笑】"
         expected = "早安\n第一件事\n第二件事"
         self.assertEqual(clean_speech_text(raw), expected)
+
+    def test_strips_prompt_leaks_and_special_tags(self) -> None:
+        raw = "你注意到使用者已經安靜一段時間了：<|endofprompt|>嗨～在忙什麼呢？"
+        expected = "嗨～在忙什麼呢？"
+        self.assertEqual(clean_speech_text(raw), expected)
+
+        raw_role = "回答：今天太陽很大，記得防曬。"
+        self.assertEqual(clean_speech_text(raw_role), "今天太陽很大，記得防曬。")
 
     def test_handles_empty_or_whitespace(self) -> None:
         self.assertEqual(clean_speech_text(""), "")

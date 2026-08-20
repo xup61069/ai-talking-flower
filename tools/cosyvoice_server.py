@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+import re
 import sys
 import threading
 import time
@@ -44,6 +45,11 @@ def _stream_pcm(text: str, speed: float) -> Iterator[bytes]:
     if _model is None:
         raise RuntimeError("CosyVoice 尚未載入")
 
+    # 去除特殊標籤與標頭殘留，避免 TTS 模型朗讀指令
+    text = re.sub(r"<\|[^|>]*\|>", "", text).strip()
+    if not text:
+        return
+
     started = time.perf_counter()
     first_chunk_at: float | None = None
     audio_samples = 0
@@ -53,9 +59,10 @@ def _stream_pcm(text: str, speed: float) -> Iterator[bytes]:
         _model.model.token_hop_len = _token_hop_len
         _model.model.token_max_hop_len = 4 * _token_hop_len
         if _style_instruction:
+            clean_style = re.sub(r"<\|[^|>]*\|>", "", _style_instruction).strip()
             outputs = _model.inference_instruct2(
                 text,
-                _style_instruction,
+                clean_style,
                 _prompt_wav,
                 zero_shot_spk_id=_speaker_id,
                 stream=True,
