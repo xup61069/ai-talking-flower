@@ -62,21 +62,10 @@ if (-not (Test-Path -LiteralPath $modelDir)) {
 }
 
 New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
-$arguments = @(
-    '-X', 'utf8',
-    $serverScript,
-    '--cosyvoice-root', $cosyRoot,
-    '--model-dir', $modelDir,
-    '--prompt-wav', $promptWav,
-    '--prompt-text', $promptText,
-    '--style-file', $styleFile,
-    '--flow-steps', '6',
-    '--host', '127.0.0.1',
-    '--port', '50000'
-)
+$argList = "-X utf8 `"$serverScript`" --cosyvoice-root `"$cosyRoot`" --model-dir `"$modelDir`" --prompt-wav `"$promptWav`" --prompt-text `"$promptText`" --style-file `"$styleFile`" --flow-steps 6 --host 127.0.0.1 --port 50000"
 
 Write-Host 'CosyVoice3: loading (about 30 seconds on first start)...'
-$process = Start-Process -FilePath $python -ArgumentList $arguments -WorkingDirectory $cosyRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+$process = Start-Process -FilePath $python -ArgumentList $argList -WorkingDirectory $cosyRoot -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
 Set-Content -LiteralPath $pidFile -Value $process.Id -Encoding ascii
 
 $deadline = (Get-Date).AddSeconds(120)
