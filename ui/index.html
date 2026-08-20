@@ -1019,6 +1019,27 @@ $("btn-test-llm").onclick = async () => {
   if (!res.ok) toast(res.reason || "測試失敗", "warn");
 };
 
+// 鍵盤快捷鍵（空白鍵戳戳、Enter 快速發送）
+window.addEventListener("keydown", (e) => {
+  const tag = document.activeElement ? document.activeElement.tagName.toLowerCase() : "";
+  if (e.code === "Space" && tag !== "input" && tag !== "textarea" && tag !== "select") {
+    e.preventDefault();
+    $("btn-poke").click();
+  }
+});
+$("test-llm-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("btn-test-llm").click();
+  }
+});
+$("test-tts-text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    $("btn-test-tts").click();
+  }
+});
+
 /* ---------- 🎭 性格卡片 ---------- */
 async function renderPersonas() {
   const data = await get("/api/personas");
