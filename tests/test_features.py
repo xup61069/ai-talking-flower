@@ -193,5 +193,53 @@ class WebNewFeaturesTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("reply", response.json())
 
 
+class VoiceCommanderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from talking_flower.commands import parse_duration_to_seconds, VoiceCommander
+        self.parse_duration = parse_duration_to_seconds
+        self.commander = VoiceCommander()
+        self.mock_controller = mock.MagicMock()
+        self.mock_controller.live = mock.MagicMock()
+        self.mock_controller.live.volume = 80
+        self.mock_controller.live.speed = 0.9
+        self.mock_controller.reminders = mock.MagicMock()
+        self.mock_controller.bus = mock.MagicMock()
+
+    def test_parse_duration(self) -> None:
+        self.assertEqual(self.parse_duration("5分鐘"), 300.0)
+        self.assertEqual(self.parse_duration("半小時"), 1800.0)
+        self.assertEqual(self.parse_duration("1小時"), 3600.0)
+        self.assertEqual(self.parse_duration("30秒"), 30.0)
+        self.assertEqual(self.parse_duration("十分鐘"), 600.0)
+
+    def test_time_query(self) -> None:
+        res = self.commander.try_execute("現在幾點？", self.mock_controller)
+        self.assertTrue(res.handled)
+        self.assertIn("現在時間是", res.reply)
+
+    def test_reminder_command(self) -> None:
+        res = self.commander.try_execute("5分鐘後提醒我喝水", self.mock_controller)
+        self.assertTrue(res.handled)
+        self.assertEqual(res.action, "add_reminder")
+        self.assertIn("喝水", res.reply)
+        self.mock_controller.reminders.add.assert_called_once_with("喝水", 300.0)
+
+    def test_persona_switch_command(self) -> None:
+        res = self.commander.try_execute("切換到夜間模式", self.mock_controller)
+        self.assertTrue(res.handled)
+        self.assertEqual(res.action, "switch_persona")
+        self.assertIn("夜間花花", res.reply)
+
+    def test_volume_and_speed_command(self) -> None:
+        vol_res = self.commander.try_execute("大聲一點", self.mock_controller)
+        self.assertTrue(vol_res.handled)
+        self.assertEqual(self.mock_controller.live.volume, 95)
+
+        spd_res = self.commander.try_execute("講話慢一點", self.mock_controller)
+        self.assertTrue(spd_res.handled)
+        self.assertEqual(self.mock_controller.live.speed, 0.8)
+
+
 if __name__ == "__main__":
     unittest.main()
+

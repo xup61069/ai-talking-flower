@@ -31,6 +31,35 @@
     --crimson: #ff5c5c;
   }
 
+  body.theme-sakura {
+    --bg-mesh: radial-gradient(circle at 15% 15%, #25162a 0%, #0c0d12 55%),
+               radial-gradient(circle at 85% 85%, #102124 0%, #0c0d12 55%);
+    --sakura: #ff6ea3;
+    --sakura-glow: rgba(255, 110, 163, 0.35);
+  }
+  body.theme-mint {
+    --bg-mesh: radial-gradient(circle at 15% 15%, #122822 0%, #0a110e 55%),
+               radial-gradient(circle at 85% 85%, #0e1e24 0%, #0a110e 55%);
+    --sakura: #38ef7d;
+    --sakura-glow: rgba(56, 239, 125, 0.35);
+    --panel-border-hover: rgba(56, 239, 125, 0.35);
+  }
+  body.theme-sunset {
+    --bg-mesh: radial-gradient(circle at 15% 15%, #321812 0%, #0d0a09 55%),
+               radial-gradient(circle at 85% 85%, #241410 0%, #0d0a09 55%);
+    --sakura: #ff7e40;
+    --sakura-glow: rgba(255, 126, 64, 0.35);
+    --panel-border-hover: rgba(255, 126, 64, 0.35);
+  }
+  body.theme-oled {
+    --bg-base: #000000;
+    --bg-mesh: none;
+    --panel-bg: rgba(15, 15, 18, 0.85);
+    --sakura: #a77eff;
+    --sakura-glow: rgba(167, 126, 255, 0.35);
+    --panel-border-hover: rgba(167, 126, 255, 0.35);
+  }
+
   * { box-sizing: border-box; margin: 0; padding: 0; }
   
   body {
@@ -420,6 +449,10 @@
     </div>
   </div>
 
+  <div class="hud-metrics" id="live-clock">
+    <span>🕒 <b>載入中…</b></span>
+  </div>
+
   <div class="hud-metrics">
     <span>ASR: <b id="hud-asr">--</b></span>
     <span class="hud-divider">|</span>
@@ -431,6 +464,12 @@
   </div>
 
   <div class="header-actions">
+    <select id="theme-select" style="background:var(--panel-sub); color:var(--text-main); border:1px solid var(--panel-border); border-radius:8px; padding:6px 10px; font-size:12.5px; font-weight:600; cursor:pointer">
+      <option value="theme-sakura">🌸 櫻花星夜</option>
+      <option value="theme-mint">🍃 賽博薄荷</option>
+      <option value="theme-sunset">🌅 琥珀日暮</option>
+      <option value="theme-oled">🌌 深淵黑洞</option>
+    </select>
     <button id="btn-poke" class="primary">戳戳花花 🌸</button>
     <button id="btn-listen">暫停聆聽</button>
     <button id="btn-restart">重啟管線</button>
@@ -510,7 +549,8 @@
         <path class="flower-mouth" id="flower-mouth" d="M64,76 Q70,83 76,76" fill="none" stroke="#682c16" stroke-width="2.6" stroke-linecap="round"/>
       </svg>
 
-      <div class="mini" style="color:var(--sakura); margin-top:8px; font-weight:600">點擊立繪互動戳戳 🌸</div>
+      <canvas id="waveform-canvas" width="240" height="34" style="margin-top:6px; opacity:0.85"></canvas>
+      <div class="mini" style="color:var(--sakura); font-weight:600">點擊立繪互動戳戳 🌸</div>
     </div>
 
     <!-- 即時對話視窗 -->
@@ -527,11 +567,17 @@
         </div>
       </div>
 
-      <div class="quick-chips">
-        <button class="chip" onclick="sendQuickPrompt('跟我說句加油的話！')">✨ 加油打氣</button>
-        <button class="chip" onclick="sendQuickPrompt('今天天氣如何？')">☀️ 天氣問候</button>
-        <button class="chip" onclick="sendQuickPrompt('講個好笑的冷笑話吧')">🤣 講冷笑話</button>
-        <button class="chip" onclick="sendQuickPrompt('你在想什麼呢？')">💭 隨口聊聊</button>
+      <!-- 語音直達指令快捷試用 -->
+      <div style="margin-top:10px">
+        <div class="mini" style="color:var(--text-dim); margin-bottom:6px">✨ 常用情境與語音指令（點擊直接試用）：</div>
+        <div class="quick-chips">
+          <button class="chip" onclick="sendQuickPrompt('現在幾點？')">⌚ 現在幾點？</button>
+          <button class="chip" onclick="sendQuickPrompt('5分鐘後提醒我喝水')">⏰ 5分鐘後提醒喝水</button>
+          <button class="chip" onclick="sendQuickPrompt('切換到夜間模式')">🌙 切換夜間模式</button>
+          <button class="chip" onclick="sendQuickPrompt('大聲一點')">🔊 大聲一點</button>
+          <button class="chip" onclick="sendQuickPrompt('跟我說句加油的話！')">💖 鼓勵打氣</button>
+          <button class="chip" onclick="sendQuickPrompt('講個好笑的冷笑話吧')">🤣 講冷笑話</button>
+        </div>
       </div>
 
       <div class="row" style="margin-top:12px">
@@ -780,7 +826,58 @@ function spawnParticles(x, y) {
   }
 }
 
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (AudioCtx) audioCtx = new AudioCtx();
+  }
+  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+
+function playChime() {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const notes = [523.25, 659.25, 783.99]; // C5, E5, G5
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.07);
+      gain.gain.setValueAtTime(0.06, ctx.currentTime + i * 0.07);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.07 + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.07);
+      osc.stop(ctx.currentTime + i * 0.07 + 0.32);
+    });
+  } catch (e) {}
+}
+
+function playReminderBell() {
+  try {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const notes = [659.25, 880, 1046.5, 1318.5]; // E5, A5, C6, E6
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.1);
+      gain.gain.setValueAtTime(0.08, ctx.currentTime + i * 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + i * 0.1 + 0.5);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.1);
+      osc.stop(ctx.currentTime + i * 0.1 + 0.55);
+    });
+  } catch (e) {}
+}
+
 function triggerPokeAnimation(e) {
+  playChime();
   const svg = $("flower-svg");
   svg.classList.remove("flower-poked");
   void svg.offsetWidth;
@@ -826,10 +923,12 @@ function handleEvent(evt) {
       $("speech-bubble").textContent = "「" + evt.text + "」";
       break;
     case "reminder":
+      playReminderBell();
       toast("⏰ 提醒時間到：" + evt.text, "warn", 12000);
       renderReminders();
       break;
     case "reminder_added":
+      playChime();
       renderReminders();
       break;
     case "persona_changed":
@@ -1151,7 +1250,76 @@ $("btn-style-save").onclick = async () => {
   toast(res.ok ? "風格已更新" : "風格儲存失敗", res.ok ? "info" : "warn");
 };
 
+/* ---------- 🎨 主題切換與即時時鐘 ---------- */
+function initThemes() {
+  const select = $("theme-select");
+  if (!select) return;
+  const saved = localStorage.getItem("flower_theme") || "theme-sakura";
+  document.body.className = saved;
+  select.value = saved;
+  select.onchange = () => {
+    document.body.className = select.value;
+    localStorage.setItem("flower_theme", select.value);
+  };
+}
+
+function updateLiveClock() {
+  const el = $("live-clock");
+  if (!el) return;
+  const now = new Date();
+  const days = ["週日", "週一", "週二", "週三", "週四", "週五", "週六"];
+  const pad = (n) => String(n).padStart(2, "0");
+  const mo = pad(now.getMonth() + 1);
+  const da = pad(now.getDate());
+  const hr = pad(now.getHours());
+  const mi = pad(now.getMinutes());
+  const se = pad(now.getSeconds());
+  const day = days[now.getDay()];
+  el.innerHTML = `<span>🕒 <b>${mo}/${da}</b> (${day}) <b>${hr}:${mi}:${se}</b></span>`;
+}
+
+function initWaveform() {
+  const canvas = $("waveform-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  let wavePhase = 0;
+
+  function renderWave() {
+    requestAnimationFrame(renderWave);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const isSpeaking = currentStatus === "說話中";
+    const isListening = currentStatus === "正在聽";
+    const isThinking = currentStatus === "思考中";
+
+    const amp = isSpeaking ? 11 : (isListening ? 6.5 : (isThinking ? 4 : 1.5));
+    const freq = isSpeaking ? 0.08 : (isListening ? 0.055 : 0.035);
+    const color = isSpeaking ? "#ff6ea3" : (isListening ? "#4ee49d" : (isThinking ? "#ffb84d" : "rgba(255,255,255,0.18)"));
+
+    ctx.beginPath();
+    ctx.lineWidth = isSpeaking || isListening ? 2.2 : 1.2;
+    ctx.strokeStyle = color;
+    ctx.shadowBlur = isSpeaking || isListening ? 6 : 0;
+    ctx.shadowColor = color;
+
+    const midY = canvas.height / 2;
+    for (let x = 0; x < canvas.width; x++) {
+      const envelope = Math.sin(Math.PI * (x / canvas.width));
+      const y = midY + Math.sin(x * freq + wavePhase) * amp * envelope;
+      if (x === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    wavePhase += isSpeaking ? 0.14 : (isListening ? 0.08 : 0.03);
+  }
+  renderWave();
+}
+
 async function init() {
+  initThemes();
+  updateLiveClock();
+  setInterval(updateLiveClock, 1000);
+  initWaveform();
   connect();
   await renderSettings();
   await renderVoices();

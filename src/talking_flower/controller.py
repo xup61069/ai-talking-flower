@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 from enum import Enum
 import logging
 import random
@@ -10,6 +11,7 @@ from .aec import EchoCanceller
 from .asr import SpeechRecognizer
 from .audio import AudioInput, BlockResampler
 from .bus import RestartRequired, RuntimeControl, StatusBus
+from .commands import VoiceCommander
 from .config import Config
 from .llm import LlamaCppClient, SpeechChunker
 from .memory import ConversationMemory
@@ -59,6 +61,7 @@ class FlowerController:
             if reminders is not None
             else ReminderScheduler(config.project_root / "data" / "reminders.db")
         )
+        self.commander = VoiceCommander()
         self.state = State.IDLE
         self._turn_task: asyncio.Task[None] | None = None
         self._last_activity = time.monotonic()
@@ -231,9 +234,13 @@ class FlowerController:
 
     def _persona_with_summary(self) -> str:
         persona = (self.live.persona if self.live is not None else "") or self.config.llm.persona
-        if not self._summary_cache:
-            return persona
-        return persona + "\n\n背景（較早的對話摘要）：\n" + self._summary_cache
+        now = datetime.datetime.now()
+        weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
+        time_str = now.strftime(f"%Y年%m月%d日 {weekdays[now.weekday()]} %H:%M")
+        context_parts = [persona, f"\n目前時間：{time_str}"]
+        if self._summary_cache:
+            context_parts.append("\n背景（較早的對話摘要）：\n" + self._summary_cache)
+        return "\n".join(context_parts)
 
     async def _generate(self, user_text: str, history: list[dict[str, str]], *, speak: bool, source: str) -> str:
         self._set_state(State.THINKING)
@@ -385,5 +392,35 @@ class FlowerController:
             self.bus.publish({"type": "asr_done", "text": text, "asr_ms": self._last_asr_ms})
         self._last_activity = time.monotonic()
         name = self._live_value("name", self.config.app.name)
+
+        # 優先嘗試直達語音指令（時間查詢、設定提醒、切換性格、音量語速調整）
+        cmd = self.commander.try_execute(text, self)
+        if cmd.handled:
+            if self.bus is not None:
+                self.bus.publish({"type": "user_text", "text": text})
+            print(f"\n你：{text}\n{name}：{cmd.reply}", flush=True)
+            self.memory.add("user", text)
+            self.memory.add("assistant", cmd.reply)
+            if self.bus is not None:
+                self.bus.publish({"type": "flower_delta", "text": cmd.reply})
+                self.bus.publish(
+                    {
+                        "type": "metrics",
+                        "asr_ms": self._last_asr_ms,
+                        "ttft_ms": 0.0,
+                        "ttfa_ms": 5.0,
+                        "total_turn_ms": 20.0,
+                    }
+                )
+            try:
+                self._set_state(State.SPEAKING)
+                await self.tts.begin_turn()
+                await self.tts.speak(cmd.reply)
+            finally:
+                await self.tts.end_turn()
+                self._set_state(State.IDLE)
+            return
+
+        # 否則進入常規 LLM 對話回合
         print(f"\n你：{text}\n{name}：", end="", flush=True)
         await self.text_turn(text, speak=True)

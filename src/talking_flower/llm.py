@@ -112,10 +112,18 @@ class LlamaCppClient:
 
 class SpeechChunker:
     ENDINGS = set("。！？!?；;\n")
+    SOFT_ENDINGS = set("，,、… ")
 
-    def __init__(self, *, minimum_chars: int = 8, maximum_chars: int = 28) -> None:
+    def __init__(
+        self,
+        *,
+        minimum_chars: int = 8,
+        maximum_chars: int = 28,
+        soft_split: bool = False,
+    ) -> None:
         self.minimum_chars = minimum_chars
         self.maximum_chars = maximum_chars
+        self.soft_split = soft_split
         self._buffer = ""
 
     def feed(self, text: str) -> list[str]:
@@ -137,8 +145,15 @@ class SpeechChunker:
         return [remaining] if remaining else []
 
     def _find_split(self) -> int | None:
+        # 1. 優先尋找完整句結尾（句號、驚嘆號、問號、分號）
         for index, char in enumerate(self._buffer, start=1):
             if char in self.ENDINGS and index >= self.minimum_chars:
                 return index
-        # 不因字數或逗號硬切。等完整句尾後才交給 TTS，避免語音中間出現停頓。
+        # 2. 若啟用 soft_split 且字數超過上限，在最近的逗號或停頓處切分
+        if self.soft_split and len(self._buffer) >= self.maximum_chars:
+            for index in range(len(self._buffer), self.minimum_chars - 1, -1):
+                if self._buffer[index - 1] in self.SOFT_ENDINGS:
+                    return index
+            if len(self._buffer) >= int(self.maximum_chars * 1.5):
+                return self.maximum_chars
         return None

@@ -88,6 +88,11 @@ class ChunkerTests(unittest.TestCase):
         self.assertEqual(chunker.feed(partial), [])
         self.assertEqual(chunker.feed("。"), [partial + "。"])
 
+    def test_soft_split_on_comma_when_enabled(self) -> None:
+        chunker = SpeechChunker(minimum_chars=4, maximum_chars=8, soft_split=True)
+        self.assertEqual(chunker.feed("這是一段很長的話，"), ["這是一段很長的話，"])
+        self.assertEqual(chunker.finish(), [])
+
 
 class VadTests(unittest.TestCase):
     def test_detects_synthetic_utterance(self) -> None:
