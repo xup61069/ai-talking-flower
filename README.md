@@ -14,8 +14,8 @@
 Volt 1 / 麥克風持續收音
 → WebRTC AEC3 消除花花自己的喇叭回音
 → TEN VAD 即時判斷開始與結束說話
-→ FunASR Streaming Paraformer 繁體中文語音辨識
-→ 語音直達指令引擎（VoiceCommander）攔截時間/提醒/性格/音量指令（0ms LLM 延遲）
+→ FunASR Streaming Paraformer 繁體中文語音辨識（真串流：邊說邊辨，部分文字即時上屏）
+→ 語音直達指令引擎（VoiceCommander / skills 插件）攔截時間/提醒/天氣/性格/音量指令（0ms LLM 延遲）
   ↳ 若非直達指令 → llama.cpp (Qwen) 串流思考
 → 智慧平滑斷句（SpeechChunker）降低首音延遲 (TTFA)
 → TTS 串流播放（Kokoro 首音 ~0.1s / CosyVoice3 角色聲音）

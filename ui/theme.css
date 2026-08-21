@@ -317,6 +317,13 @@
     color: #eaf3ff; border: 1px solid rgba(100, 175, 255, 0.25);
     border-top-right-radius: 4px;
   }
+  /* 即時辨識上屏：半透明虛線邊框，表示文字還在成長 */
+  .msg-row.partial .msg-bubble {
+    opacity: 0.62;
+    border-style: dashed !important;
+    animation: partialPulse 1.2s infinite ease-in-out;
+  }
+  @keyframes partialPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.75; } }
   .msg-row.flower .msg-bubble {
     background: rgba(33, 35, 48, 0.9);
     border: 1px solid var(--panel-border); border-left: 3px solid var(--sakura);

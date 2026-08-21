@@ -80,6 +80,10 @@ class FlowerController:
         self._last_reminder_gc = time.monotonic()
         self._aec_error_count = 0
         self._last_aec_warn = 0.0
+        self._stream_session = None
+        self._last_partial = ""
+        self._partial_last_pub = 0.0
+        self._last_stream_finish_ms: float = 0.0
 
     def _set_state(self, state: State) -> None:
         if state != self.state:
@@ -145,6 +149,9 @@ class FlowerController:
                     self._turn_task = None
                     segmenter.reset()
                     audio.drain()
+                    # 中斷的語句串流快取一併丟棄，避免殘留音訊污染下一輪
+                    self._stream_session = None
+                    self._last_partial = ""
                     self._set_state(State.IDLE)
 
                 if self.live is not None and (not self.live.listening or self.live.manual_busy):
@@ -213,6 +220,9 @@ class FlowerController:
                 utterance, status = segmenter.push(frame_16k)
                 self._publish_audio(status)
 
+                # 真串流 ASR：所有幀持續餵入 session（湊滿 stride 才推論）
+                await self._feed_stream_frame(frame_16k, status.active)
+
                 if (
                     self._barge_in
                     and self._turn_task is not None
@@ -237,7 +247,48 @@ class FlowerController:
                     self._set_state(State.IDLE)
 
                 if utterance is not None:
-                    self._turn_task = asyncio.create_task(self._handle_utterance(utterance))
+                    stream_text = await self._finish_stream()
+                    self._turn_task = asyncio.create_task(self._handle_utterance(utterance, stream_text))
+
+    async def _feed_stream_frame(self, frame_16k, active: bool) -> None:
+        """把 16k 幀餵入串流 session；VAD active 時節流發布部分文字。"""
+        if not bool(self._live_value("asr_streaming", True)):
+            return
+        if not getattr(self.asr, "_streaming_supported", False):
+            return
+        if self._stream_session is None:
+            try:
+                self._stream_session = self.asr.create_stream()
+            except Exception:
+                LOGGER.exception("建立串流辨識 session 失敗，停用即時上屏")
+                return
+            self._last_partial = ""
+        try:
+            text = await asyncio.to_thread(self._stream_session.feed, frame_16k)
+        except Exception:
+            LOGGER.exception("串流 ASR 餵入失敗，重置 session")
+            self._stream_session = None
+            return
+        now = time.monotonic()
+        if active and text and text != self._last_partial and now - self._partial_last_pub >= 0.25:
+            self._last_partial = text
+            self._partial_last_pub = now
+            self._publish({"type": "asr_partial", "text": text})
+
+    async def _finish_stream(self) -> str:
+        """收尾串流 session，回傳完整文字；失敗回傳空字串走批次備援。"""
+        session, self._stream_session = self._stream_session, None
+        if session is None:
+            return ""
+        start = time.monotonic()
+        try:
+            text = await asyncio.to_thread(session.finish)
+            self._last_asr_ms = round((time.monotonic() - start) * 1000, 1)
+            LOGGER.info("串流辨識完成（%d 字，%.0f ms）", len(text), self._last_asr_ms)
+            return text.strip()
+        except Exception:
+            LOGGER.exception("串流 ASR 收尾失敗，改用批次轉錄")
+            return ""
 
     @property
     def _barge_in(self) -> bool:
@@ -468,11 +519,16 @@ class FlowerController:
             await self.tts.end_turn()
             self._set_state(State.IDLE)
 
-    async def _handle_utterance(self, utterance) -> None:
+    async def _handle_utterance(self, utterance, stream_text: str | None = None) -> None:
         self._set_state(State.TRANSCRIBING)
-        asr_start = time.monotonic()
-        text = await self.asr.transcribe(utterance, self.config.audio.asr_sample_rate)
-        self._last_asr_ms = round((time.monotonic() - asr_start) * 1000, 1)
+        if stream_text:
+            # 真串流路徑：說話期間已攤銷運算，收尾僅需最後一段，ASR 耗時趨近 0
+            text = stream_text
+            self._last_asr_ms = self._last_stream_finish_ms
+        else:
+            asr_start = time.monotonic()
+            text = await self.asr.transcribe(utterance, self.config.audio.asr_sample_rate)
+            self._last_asr_ms = round((time.monotonic() - asr_start) * 1000, 1)
         if not text:
             LOGGER.info("沒有辨識到文字")
             return

@@ -101,6 +101,33 @@ function removeThinkingIndicator() {
   }
 }
 
+// 即時辨識上屏（asr_partial）：灰色使用者側泡泡，隨辨識文字成長
+let partialRow = null;
+
+function updatePartialBubble(text) {
+  if (!text) return;
+  removeThinkingIndicator();
+  const chat = $("chat");
+  if (!partialRow) {
+    partialRow = document.createElement("div");
+    partialRow.className = "msg-row user partial";
+    partialRow.innerHTML = `
+      <div class="msg-avatar">👤</div>
+      <div class="msg-bubble"></div>
+    `;
+    chat.appendChild(partialRow);
+  }
+  partialRow.querySelector(".msg-bubble").textContent = text + "…";
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function removePartialBubble() {
+  if (partialRow) {
+    partialRow.remove();
+    partialRow = null;
+  }
+}
+
 function appendMsg(role, text) {
   removeThinkingIndicator();
   const chat = $("chat");
@@ -229,8 +256,12 @@ function handleEvent(evt) {
       lastTtsRms = Math.max(lastTtsRms, ttsRmsTarget);
       break;
     case "user_text":
+      removePartialBubble();
       appendMsg("user", evt.text);
       currentFlowerMsgBubble = null;
+      break;
+    case "asr_partial":
+      updatePartialBubble(evt.text || "");
       break;
     case "flower_delta":
       removeThinkingIndicator();

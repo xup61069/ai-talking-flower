@@ -66,6 +66,7 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("asr.backend", "str", "ASR 後端", RESTART),
     SettingSpec("asr.model", "str", "ASR 模型", RESTART),
     SettingSpec("asr.device", "choice", "ASR 裝置", RESTART, options=("cpu", "cuda")),
+    SettingSpec("asr.streaming", "bool", "即時辨識上屏（串流）", LIVE, default=True),
     # LLM
     SettingSpec("llm.base_url", "str", "LLM 位址", RESTART),
     SettingSpec("llm.model", "str", "LLM 模型", RESTART),
@@ -310,6 +311,7 @@ class LiveSettings:
         self.idle_chat_prompt: str = config.idle_chat.prompt
         self.listening: bool = True
         self.manual_busy: bool = False
+        self.asr_streaming: bool = True
         self.weather_location: str = "臺北市"
         try:
             self.weather_location = str(store.value("weather.location") or "臺北市")
@@ -333,6 +335,7 @@ class LiveSettings:
         "llm.persona": "persona",
         "interaction.barge_in_enabled": "barge_in_enabled",
         "interaction.wake_word": "wake_word",
+        "asr.streaming": "asr_streaming",
         "weather.location": "weather_location",
         "idle_chat.enabled": "idle_chat_enabled",
         "idle_chat.timeout_s": "idle_chat_timeout_s",
