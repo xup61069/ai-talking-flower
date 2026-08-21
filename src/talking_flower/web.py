@@ -218,14 +218,14 @@ class WebServer:
             ctx.store.set("tts.speed", preset.speed)
             if preset.idle_prompt:
                 ctx.store.set("idle_chat.prompt", preset.idle_prompt)
-            ctx.store.set("app.persona_preset", preset.id)
+            ctx.store.set("profile.persona_preset", preset.id)
             ctx.live.set("llm.persona", preset.persona)
             ctx.live.set("llm.temperature", preset.temperature)
             ctx.live.set("llm.top_p", preset.top_p)
             ctx.live.set("tts.speed", preset.speed)
             if preset.idle_prompt:
                 ctx.live.set("idle_chat.prompt", preset.idle_prompt)
-            ctx.live.set("app.persona_preset", preset.id)
+            ctx.live.set("profile.persona_preset", preset.id)
             ctx.bus.publish({"type": "persona_changed", "id": preset.id, "name": preset.name})
             return {"ok": True, "id": preset.id, "name": preset.name}
 

@@ -175,7 +175,7 @@ class VoiceCommander:
                 if preset.idle_prompt:
                     controller.live.set("idle_chat.prompt", preset.idle_prompt)
                 controller.live.persona_preset = preset.id
-            # 同步持久化，避免重啟後人設回溯
+            # 同步持久化，避免重啟後人設回溯（統一走 profile.persona_preset）
             store = getattr(controller, "store", None)
             if store is not None:
                 try:
@@ -185,17 +185,9 @@ class VoiceCommander:
                     store.set("tts.speed", preset.speed)
                     if preset.idle_prompt:
                         store.set("idle_chat.prompt", preset.idle_prompt)
+                    store.set("profile.persona_preset", preset.id)
                 except (KeyError, TypeError, ValueError):
                     pass
-                try:
-                    store.set("app.persona_preset", preset.id)
-                except (KeyError, TypeError, ValueError):
-                    # 舊版 settings 尚未有 persona_preset，回退寫 raw json
-                    try:
-                        store._overrides["app.persona_preset"] = preset.id  # type: ignore[attr-defined]
-                        store._save()  # type: ignore[attr-defined]
-                    except Exception:
-                        pass
             if controller.bus is not None:
                 controller.bus.publish({"type": "persona_changed", "id": preset.id, "name": preset.name})
             reply = f"收到！已切換到「{preset.name}」模式囉～🌸"

@@ -90,7 +90,7 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("tts.sample_rate", "int", "TTS 取樣率", RESTART, 8000, 48000, 1000),
     SettingSpec("tts.speed", "float", "語速", LIVE, 0.5, 2.0, 0.05),
     SettingSpec(
-        "app.persona_preset",
+        "profile.persona_preset",
         "choice",
         "性格預設",
         LIVE,
@@ -144,12 +144,27 @@ class SettingsStore:
         if not isinstance(raw, dict):
             LOGGER.warning("settings.json 格式錯誤，忽略")
             return
+        # 舊版遷移：app.persona_preset → profile.persona_preset
+        migrated = False
+        if "app.persona_preset" in raw and "profile.persona_preset" not in raw:
+            raw["profile.persona_preset"] = raw.pop("app.persona_preset")
+            LOGGER.info("已自動遷移 app.persona_preset → profile.persona_preset")
+            migrated = True
+        # 清理舊的特判殘留（若同時存在，保留新）
+        if "app.persona_preset" in raw:
+            raw.pop("app.persona_preset", None)
+            migrated = True
         for path, value in raw.items():
             if path in SPEC_BY_PATH:
                 try:
                     self._overrides[path] = _coerce(SPEC_BY_PATH[path], value)
                 except (TypeError, ValueError) as error:
                     LOGGER.warning("忽略無效的設定 %s=%r：%s", path, value, error)
+        if migrated:
+            try:
+                self._save()
+            except Exception:
+                pass
 
     def merged_raw(self) -> dict:
         raw = deepcopy(self._base)
@@ -158,12 +173,8 @@ class SettingsStore:
         return raw
 
     def load_config(self) -> Config:
-        raw = self.merged_raw()
-        # 過濾掉非 Config 的擴充設定（如 app.persona_preset）
-        if "app" in raw and "persona_preset" in raw["app"]:
-            raw = deepcopy(raw)
-            raw["app"] = {k: v for k, v in raw["app"].items() if k != "persona_preset"}
-        return config_from_raw(self.project_root, raw)
+        # config_from_raw 已對未知 key 容忍，無需特判刪除
+        return config_from_raw(self.project_root, self.merged_raw())
 
     def value(self, path: str) -> object:
         if path in self._overrides:
@@ -262,16 +273,12 @@ class LiveSettings:
         self.idle_chat_prompt: str = config.idle_chat.prompt
         self.listening: bool = True
         self.manual_busy: bool = False
-        # 持久化的 preset，若 store 已有覆蓋則沿用
+        # 持久化的 preset，統一走 profile.persona_preset
         try:
-            preset_val = store.value("app.persona_preset")
+            preset_val = store.value("profile.persona_preset")
             self.persona_preset: str = str(preset_val) if preset_val else "energetic"
         except (KeyError, AttributeError, ValueError):
-            # 舊 settings.json 可能沒有此 key，回退到直接讀 overrides
-            try:
-                self.persona_preset = str(store._overrides.get("app.persona_preset", "energetic"))  # type: ignore[attr-defined]
-            except Exception:
-                self.persona_preset = "energetic"
+            self.persona_preset = "energetic"
 
     LIVE_PATHS: dict[str, str] = {
         "app.name": "name",
@@ -286,7 +293,7 @@ class LiveSettings:
         "idle_chat.enabled": "idle_chat_enabled",
         "idle_chat.timeout_s": "idle_chat_timeout_s",
         "idle_chat.prompt": "idle_chat_prompt",
-        "app.persona_preset": "persona_preset",
+        "profile.persona_preset": "persona_preset",
     }
 
     def set(self, path: str, value: object) -> bool:

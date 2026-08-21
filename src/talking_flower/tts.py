@@ -143,6 +143,30 @@ class _PcmPlayer:
         self._error: BaseException | None = None
         self._stop = threading.Event()
         self._dump_path = os.environ.get("FLOWER_TTS_DUMP", "").strip()
+        # 有狀態重採樣器（soxr 無則 scipy overlap），避免每塊 FIR 瞬態
+        self._resampler = None
+        self._resampler_tail = np.zeros(0, dtype=np.float32)
+        self._resampler_mode = "none"
+        if self.sample_rate != self.source_rate:
+            try:
+                import soxr  # type: ignore
+
+                self._resampler = soxr.ResampleStream(self.source_rate, self.sample_rate, 1, dtype="float32", quality="HQ")
+                self._resampler_mode = "soxr"
+            except Exception:
+                try:
+                    from math import gcd
+
+                    from scipy.signal import resample_poly  # type: ignore
+
+                    g = gcd(self.sample_rate, self.source_rate)
+                    self._resampler_up = self.sample_rate // g
+                    self._resampler_down = self.source_rate // g
+                    self._resampler_fn = resample_poly  # type: ignore
+                    self._resampler_mode = "scipy"
+                    self._resampler_tail_len = 512
+                except Exception:
+                    self._resampler_mode = "interp"
         self._thread = threading.Thread(
             target=self._run,
             name="flower-audio-output",
@@ -229,28 +253,55 @@ class _PcmPlayer:
         samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
         samples *= max(0, min(volume, 100)) / 100.0
         if self.sample_rate != self.source_rate:
-            try:
-                from math import gcd
-
-                from scipy.signal import resample_poly  # type: ignore
-
-                g = gcd(self.sample_rate, self.source_rate)
-                up = self.sample_rate // g
-                down = self.source_rate // g
-                samples = resample_poly(samples, up, down).astype(np.float32)
-            except Exception:
-                # 回退：整數倍用線性內插，否則近似
-                if self.sample_rate % self.source_rate == 0:
-                    factor = self.sample_rate // self.source_rate
-                    positions = np.arange(len(samples) * factor, dtype=np.float32) / factor
-                    samples = np.interp(positions, np.arange(len(samples)), samples).astype(np.float32)
-                else:
-                    expected_len = int(round(len(samples) * self.sample_rate / self.source_rate))
-                    if expected_len > 0:
-                        x_old = np.arange(len(samples), dtype=np.float32)
-                        x_new = np.linspace(0, len(samples) - 1, expected_len, dtype=np.float32)
-                        samples = np.interp(x_new, x_old, samples).astype(np.float32)
+            if self._resampler_mode == "soxr" and self._resampler is not None:
+                try:
+                    samples = self._resampler.resample_chunk(samples).astype(np.float32)
+                except Exception:
+                    # 回退線性
+                    pass
+                # soxr 成功即直接返回
+                if self._resampler_mode == "soxr":
+                    return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            if self._resampler_mode == "scipy":
+                try:
+                    # overlap-save 消除邊界瞬態
+                    extended = np.concatenate([self._resampler_tail, samples]) if len(self._resampler_tail) else samples
+                    resampled = self._resampler_fn(extended, self._resampler_up, self._resampler_down)  # type: ignore[attr-defined]
+                    discard = int(round(len(self._resampler_tail) * self._resampler_up / self._resampler_down)) if len(self._resampler_tail) else 0  # type: ignore[attr-defined]
+                    if discard and len(resampled) > discard:
+                        resampled = resampled[discard:]
+                    expected = int(round(len(samples) * self._resampler_up / self._resampler_down))  # type: ignore[attr-defined]
+                    if len(resampled) > expected:
+                        resampled = resampled[:expected]
+                    # 更新 tail
+                    keep = min(len(samples), self._resampler_tail_len)  # type: ignore[attr-defined]
+                    self._resampler_tail = samples[-keep:].astype(np.float32) if keep > 0 else np.zeros(0, dtype=np.float32)
+                    samples = resampled.astype(np.float32)
+                except Exception:
+                    pass
+                return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            # 回退線性
+            if self.sample_rate % self.source_rate == 0:
+                factor = self.sample_rate // self.source_rate
+                positions = np.arange(len(samples) * factor, dtype=np.float32) / factor
+                samples = np.interp(positions, np.arange(len(samples)), samples).astype(np.float32)
+            else:
+                expected_len = int(round(len(samples) * self.sample_rate / self.source_rate))
+                if expected_len > 0:
+                    x_old = np.arange(len(samples), dtype=np.float32)
+                    x_new = np.linspace(0, len(samples) - 1, expected_len, dtype=np.float32)
+                    samples = np.interp(x_new, x_old, samples).astype(np.float32)
         return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+    def _flush_resampler(self) -> bytes:
+        if self._resampler_mode == "soxr" and self._resampler is not None:
+            try:
+                tail = self._resampler.resample_chunk(np.zeros(0, dtype=np.float32), last=True)
+                if len(tail):
+                    return (np.clip(tail, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+            except Exception:
+                pass
+        return b""
 
     async def write(self, data: bytes) -> None:
         if self._error is not None:
@@ -259,6 +310,13 @@ class _PcmPlayer:
 
     async def finish(self) -> None:
         if self._thread.is_alive() and not self._stop.is_set():
+            # 先排空 soxr 延遲
+            try:
+                flush_bytes = self._flush_resampler()
+                if flush_bytes:
+                    await asyncio.to_thread(self._queue.put, flush_bytes)
+            except Exception:
+                pass
             await asyncio.to_thread(self._queue.put, None)
         await asyncio.to_thread(self._thread.join)
         if self._error is not None:

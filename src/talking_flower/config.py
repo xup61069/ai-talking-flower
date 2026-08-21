@@ -95,6 +95,11 @@ class TtsConfig:
 
 
 @dataclass(frozen=True)
+class ProfileConfig:
+    persona_preset: str = "energetic"
+
+
+@dataclass(frozen=True)
 class Config:
     project_root: Path
     app: AppConfig
@@ -106,6 +111,13 @@ class Config:
     asr: AsrConfig
     llm: LlmConfig
     tts: TtsConfig
+    profile: ProfileConfig = ProfileConfig()
+
+
+def _filter_fields(datacls, data: dict) -> dict:
+    """容忍未知 key：只保留 dataclass 定義的欄位，避免 AppConfig(**raw) 炸裂。"""
+    allowed = set(datacls.__dataclass_fields__.keys())  # type: ignore[attr-defined]
+    return {k: v for k, v in data.items() if k in allowed}
 
 
 def config_from_raw(project_root: Path, raw: dict) -> Config:
@@ -114,25 +126,28 @@ def config_from_raw(project_root: Path, raw: dict) -> Config:
     if not database.is_absolute():
         database = project_root / database
 
+    # 未知區段（如舊版 app.persona_preset）一律容忍，不特判刪除
+    profile_raw = raw.get("profile", {})
+    if not isinstance(profile_raw, dict):
+        profile_raw = {}
+
+    app_fields = _filter_fields(AppConfig, app_raw)
+    app_fields.pop("database", None)
     return Config(
         project_root=project_root,
-        app=AppConfig(
-            name=str(app_raw["name"]),
-            mode=str(app_raw["mode"]),
-            database=database,
-            log_level=str(app_raw["log_level"]),
-        ),
-        audio=AudioConfig(**raw["audio"]),
-        aec=AecConfig(**raw["aec"]),
-        interaction=InteractionConfig(**raw["interaction"]),
-        idle_chat=IdleChatConfig(**raw["idle_chat"]),
-        vad=VadConfig(**raw["vad"]),
+        app=AppConfig(database=database, **app_fields),  # type: ignore[arg-type]
+        audio=AudioConfig(**_filter_fields(AudioConfig, raw["audio"])),
+        aec=AecConfig(**_filter_fields(AecConfig, raw["aec"])),
+        interaction=InteractionConfig(**_filter_fields(InteractionConfig, raw["interaction"])),
+        idle_chat=IdleChatConfig(**_filter_fields(IdleChatConfig, raw["idle_chat"])),
+        vad=VadConfig(**_filter_fields(VadConfig, raw["vad"])),
         asr=AsrConfig(
-            **{key: value for key, value in raw["asr"].items() if key != "chunk_size"},
+            **_filter_fields(AsrConfig, {k: v for k, v in raw["asr"].items() if k != "chunk_size"}),
             chunk_size=tuple(int(value) for value in raw["asr"]["chunk_size"]),
         ),
-        llm=LlmConfig(**raw["llm"]),
-        tts=TtsConfig(**raw["tts"]),
+        llm=LlmConfig(**_filter_fields(LlmConfig, raw["llm"])),
+        tts=TtsConfig(**_filter_fields(TtsConfig, raw["tts"])),
+        profile=ProfileConfig(**_filter_fields(ProfileConfig, profile_raw)),
     )
 
 

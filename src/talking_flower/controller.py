@@ -76,6 +76,8 @@ class FlowerController:
         self._load_summary_cache()
         self._next_reminder_poll = 0.0
         self._last_reminder_gc = time.monotonic()
+        self._aec_error_count = 0
+        self._last_aec_warn = 0.0
 
     def _set_state(self, state: State) -> None:
         if state != self.state:
@@ -193,11 +195,15 @@ class FlowerController:
                 # 回答期間仍需持續餵 AEC capture 以維持濾波器收斂，僅丟棄 VAD 輸出。
                 # 關閉插話時，回答期間的麥克風音框不送 VAD，但要保持 AEC 狀態。
                 if self._turn_task is not None and not self._barge_in:
-                    # 維持 AEC 收斂，結果直接丟棄
+                    # 維持 AEC 收斂，結果直接丟棄（可觀測錯誤）
                     try:
                         self.aec.process_capture(input_frame)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._aec_error_count += 1
+                        now = time.monotonic()
+                        if self._aec_error_count == 1 or now - self._last_aec_warn > 60:
+                            LOGGER.warning("AEC process_capture 失敗（已 %d 次）: %s", self._aec_error_count, e)
+                            self._last_aec_warn = now
                     continue
 
                 clean_frame = self.aec.process_capture(input_frame)
@@ -470,22 +476,35 @@ class FlowerController:
             print(f"\n你：{text}\n{name}：{cmd.reply}", flush=True)
             if self.bus is not None:
                 self.bus.publish({"type": "flower_delta", "text": cmd.reply})
+            # 真實 TTFA：複用 on_first_byte 機制，避免假 5 ms
+            cmd_start = time.monotonic()
+            ttfa_ms = 0.0
+            ttfa_set = False
+
+            def _mark_cmd_ttfa():
+                nonlocal ttfa_ms, ttfa_set
+                if not ttfa_set:
+                    ttfa_ms = round((time.monotonic() - cmd_start) * 1000, 1)
+                    ttfa_set = True
+
+            try:
+                self._set_state(State.SPEAKING)
+                await self.tts.begin_turn()
+                await self.tts.speak(cmd.reply, on_first_byte=_mark_cmd_ttfa)
+            finally:
+                await self.tts.end_turn()
+                self._set_state(State.IDLE)
+            total_ms = round((time.monotonic() - cmd_start) * 1000, 1)
+            if self.bus is not None:
                 self.bus.publish(
                     {
                         "type": "metrics",
                         "asr_ms": self._last_asr_ms,
                         "ttft_ms": 0.0,
-                        "ttfa_ms": 5.0,
-                        "total_turn_ms": 20.0,
+                        "ttfa_ms": ttfa_ms,
+                        "total_turn_ms": total_ms,
                     }
                 )
-            try:
-                self._set_state(State.SPEAKING)
-                await self.tts.begin_turn()
-                await self.tts.speak(cmd.reply)
-            finally:
-                await self.tts.end_turn()
-                self._set_state(State.IDLE)
             return
 
         # 否則進入常規 LLM 對話回合
