@@ -100,6 +100,12 @@ class StreamingSessionTests(unittest.TestCase):
 
 
 class StreamControllerIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # controller 內部有中文 print；CI 主控台非 UTF-8 時需重設（同 main.py 做法）
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     def _make_controller(self) -> FlowerController:
         config = load_config(PROJECT_ROOT / "config.toml")
         live = mock.MagicMock()
