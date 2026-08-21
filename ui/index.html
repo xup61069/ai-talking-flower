@@ -3,6 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#ff6ea3">
 <title>AI 閒聊花花 - 智慧互動控制台</title>
 <link rel="stylesheet" href="theme.css">
 </head>
@@ -227,6 +229,16 @@
       <div id="memlist" style="display:none"></div>
     </section>
 
+    <!-- 🐛 除錯回放（ASR 輸入） -->
+    <section class="panel" style="margin-bottom:18px">
+      <div class="panel-header">
+        <span class="panel-title">🐛 除錯回放（ASR 輸入）</span>
+        <button class="small chip" id="btn-debug-refresh">重新整理</button>
+      </div>
+      <div class="mini" style="color:var(--text-dim); margin-bottom:8px">最近 5 段麥克風輸入（16k），可直接試聽辨識前的原始音訊</div>
+      <div id="debug-list" style="display:flex; flex-direction:column; gap:8px"></div>
+    </section>
+
     <!-- 🔊 語音與音色進階 -->
     <section class="panel" style="margin-bottom:18px">
       <div class="panel-header">
@@ -254,6 +266,16 @@
       <button class="small chip" onclick="$('logs').innerHTML=''">清空日誌</button>
     </div>
     <div id="logs">連線中…</div>
+  </div>
+
+  <div class="panel" style="margin-bottom:18px">
+    <div class="panel-header">
+      <span class="panel-title">📈 效能歷史趨勢（最近 100 回合）</span>
+      <button class="small chip" id="btn-metrics-refresh">重新整理</button>
+    </div>
+    <div class="mini" id="metrics-summary" style="color:var(--text-dim); margin-bottom:8px"></div>
+    <canvas id="metrics-chart" width="800" height="120" style="width:100%; max-width:800px; height:120px; background:rgba(0,0,0,0.2); border-radius:8px"></canvas>
+    <div class="mini" style="color:var(--text-muted); margin-top:6px">ASR(綠) / TTFT(藍) / TTFA(粉) / 總耗時(橘) — 數據來自 SQLite 持久化，調參有依據</div>
   </div>
 
   <div class="panel">

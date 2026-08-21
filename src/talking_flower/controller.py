@@ -22,6 +22,11 @@ from .settings import LiveSettings
 from .tts import TextToSpeech
 from .vad import UtteranceSegmenter
 
+# 除錯回放：保留最近 N 段 ASR 輸入音訊供 UI 回放（FLOWER_ASR_DUMP 概念延伸）
+import collections
+import io
+import wave
+
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,6 +89,9 @@ class FlowerController:
         self._last_partial = ""
         self._partial_last_pub = 0.0
         self._last_stream_finish_ms: float = 0.0
+        # 除錯回放：最近 5 段輸入音訊（16k, float32）+ 辨識文字
+        self._debug_recent: collections.deque[dict] = collections.deque(maxlen=5)
+        self._debug_next_id = 1
 
     def _set_state(self, state: State) -> None:
         if state != self.state:
@@ -552,6 +560,19 @@ class FlowerController:
             self._set_state(State.IDLE)
 
     async def _handle_utterance(self, utterance, stream_text: str | None = None) -> None:
+        # 除錯回放：保留本次輸入音訊（無論辨識成功與否），供 UI 回放
+        try:
+            debug_entry = {
+                "id": self._debug_next_id,
+                "ts": time.time(),
+                "audio": utterance.copy() if hasattr(utterance, "copy") else utterance,
+                "sample_rate": self.config.audio.asr_sample_rate,
+                "text": "",
+            }
+            self._debug_recent.append(debug_entry)
+            self._debug_next_id += 1
+        except Exception:
+            pass
         self._set_state(State.TRANSCRIBING)
         if stream_text:
             # 真串流路徑：說話期間已攤銷運算，收尾僅需最後一段，ASR 耗時趨近 0
@@ -564,6 +585,12 @@ class FlowerController:
         if not text:
             LOGGER.info("沒有辨識到文字")
             return
+        # 回填除錯紀錄的文字，供列表顯示
+        try:
+            if self._debug_recent:
+                self._debug_recent[-1]["text"] = text
+        except Exception:
+            pass
         if self.bus is not None:
             self.bus.publish({"type": "asr_done", "text": text, "asr_ms": self._last_asr_ms})
         self._last_activity = time.monotonic()
@@ -632,3 +659,32 @@ class FlowerController:
         # 否則進入常規 LLM 對話回合
         print(f"\n你：{text}\n{name}：", end="", flush=True)
         await self.text_turn(text, speak=True)
+
+    # 除錯回放 API 支援
+    def list_debug_utterances(self) -> list[dict]:
+        return [
+            {
+                "id": e["id"],
+                "ts": e["ts"],
+                "text": e["text"],
+                "sample_rate": e["sample_rate"],
+                "duration_s": round(len(e["audio"]) / e["sample_rate"], 2) if e["sample_rate"] else 0,
+            }
+            for e in list(self._debug_recent)
+        ]
+
+    def get_debug_wav(self, debug_id: int) -> tuple[bytes, int] | None:
+        for e in self._debug_recent:
+            if e["id"] == int(debug_id):
+                audio = e["audio"]
+                sr = int(e["sample_rate"])
+                # float32 [-1,1] → int16
+                pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype("<i2").tobytes()
+                buf = io.BytesIO()
+                with wave.open(buf, "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(sr)
+                    wf.writeframes(pcm)
+                return buf.getvalue(), sr
+        return None

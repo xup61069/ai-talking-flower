@@ -221,6 +221,27 @@ def register_routes(app, ctx: AppContext, services: WebServices) -> None:
             limit = 50
         return {"history": metrics.recent(limit), "summary": metrics.summary(max(limit, 100))}
 
+    @app.get("/api/debug/utterances")
+    async def debug_utterances() -> dict:
+        if ctx.controller is None or not hasattr(ctx.controller, "list_debug_utterances"):
+            return {"utterances": []}
+        try:
+            return {"utterances": ctx.controller.list_debug_utterances()}
+        except Exception:
+            return {"utterances": []}
+
+    @app.get("/api/debug/utterances/{utt_id}/wav")
+    async def debug_utterance_wav(utt_id: int):
+        from fastapi.responses import Response
+
+        if ctx.controller is None or not hasattr(ctx.controller, "get_debug_wav"):
+            return JSONResponse({"ok": False, "reason": "無除錯資料"}, status_code=404)
+        result = ctx.controller.get_debug_wav(int(utt_id))
+        if result is None:
+            return JSONResponse({"ok": False, "reason": "找不到該段錄音"}, status_code=404)
+        wav_bytes, sr = result
+        return Response(content=wav_bytes, media_type="audio/wav", headers={"X-Sample-Rate": str(sr)})
+
     @app.get("/api/memory")
     async def memory() -> dict:
         if ctx.memory is None:

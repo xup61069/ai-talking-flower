@@ -1,0 +1,16 @@
+{
+  "name": "AI 閒聊花花",
+  "short_name": "花花",
+  "description": "桌上的語音陪伴角色 · 支援提醒、氣象、喚醒詞",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c0d12",
+  "theme_color": "#ff6ea3",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌸</text></svg>",
+      "sizes": "100x100",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -30,6 +30,42 @@ function drawSparkline() {
   ctx.stroke();
 }
 
+async function renderMetricsChart() {
+  const canvas = $("metrics-chart");
+  const summaryEl = $("metrics-summary");
+  if (!canvas) return;
+  const data = await get("/api/metrics/history?limit=100");
+  const history = data.history || [];
+  const summary = data.summary || {};
+  if (summaryEl) {
+    if (!history.length) {
+      summaryEl.textContent = "尚無數據（說幾句話後會出現趨勢）";
+    } else {
+      summaryEl.textContent = `共 ${summary.count} 回合 · TTFA 平均 ${summary.ttfa_ms_avg}ms (max ${summary.ttfa_ms_max}ms) · TTFT ${summary.ttft_ms_avg}ms · ASR ${summary.asr_ms_avg}ms`;
+    }
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (history.length < 2) return;
+  const maxVal = Math.max(...history.map(h => Math.max(h.ttfa_ms||0, h.ttft_ms||0, h.asr_ms||0, h.total_ms||0)), 1);
+  const colors = { asr_ms: "#4ee49d", ttft_ms: "#4ecdc4", ttfa_ms: "#ff6ea3", total_ms: "#ffb84d" };
+  const keys = ["asr_ms", "ttfa_ms", "ttft_ms", "total_ms"];
+  keys.forEach(key => {
+    ctx.beginPath();
+    ctx.strokeStyle = colors[key];
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.9;
+    history.forEach((h, i) => {
+      const x = (i / (history.length - 1)) * (canvas.width - 4) + 2;
+      const y = canvas.height - 6 - ((h[key]||0) / maxVal) * (canvas.height - 12);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+  ctx.globalAlpha = 1;
+}
+
 function esc(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -263,6 +299,11 @@ function handleEvent(evt) {
     case "asr_partial":
       updatePartialBubble(evt.text || "");
       break;
+    case "asr_done":
+      removePartialBubble();
+      // 除錯回放自動刷新
+      renderDebugList();
+      break;
     case "flower_delta":
       removeThinkingIndicator();
       if (!currentFlowerMsgBubble) currentFlowerMsgBubble = appendMsg("flower", "");
@@ -279,6 +320,8 @@ function handleEvent(evt) {
       ttfaHistory.push(evt.ttfa_ms || 0);
       if (ttfaHistory.length > 40) ttfaHistory.shift();
       drawSparkline();
+      // 全量趨勢圖延遲刷新（避免每回合都 fetch）
+      if (ttfaHistory.length % 3 === 0) renderMetricsChart();
       break;
     case "poke":
       triggerPokeAnimation();
@@ -287,6 +330,14 @@ function handleEvent(evt) {
     case "reminder":
       playReminderBell();
       toast("⏰ 提醒時間到：" + evt.text, "warn", 12000);
+      // PWA 推播（手機鎖屏可見）
+      if (Notification && Notification.permission === "granted") {
+        try {
+          new Notification("花花提醒 ⏰", { body: evt.text });
+        } catch {}
+      } else if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ title: "花花提醒 ⏰", body: evt.text });
+      }
       renderReminders();
       break;
     case "reminder_added":
@@ -622,6 +673,37 @@ $("btn-mem-clear").onclick = async () => {
   if (res.ok) { $("mem-count").textContent = "0 則"; $("memlist").innerHTML = ""; toast("已清空歷史記憶", "info"); }
 };
 
+/* ---------- 除錯回放 ---------- */
+async function renderDebugList() {
+  const data = await get("/api/debug/utterances");
+  const wrap = $("debug-list");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!data.utterances || !data.utterances.length) {
+    wrap.innerHTML = '<div class="mini" style="color:var(--text-muted)">尚無錄音（說一句話後會出現在此）</div>';
+    return;
+  }
+  data.utterances.slice().reverse().forEach((u) => {
+    const el = document.createElement("div");
+    el.style.cssText = "padding:8px 10px; background:var(--panel-sub); border:1px solid var(--panel-border); border-radius:9px; display:flex; flex-direction:column; gap:6px";
+    const time = new Date(u.ts * 1000).toLocaleTimeString();
+    el.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <span class="mini"><b>#${u.id}</b> ${esc(u.text || "(辨識中)")} · ${u.duration_s}s · ${time}</span>
+        <span class="mini" style="color:var(--text-muted)">${u.sample_rate}Hz</span>
+      </div>
+      <audio controls preload="none" src="/api/debug/utterances/${u.id}/wav" style="width:100%"></audio>
+    `;
+    wrap.appendChild(el);
+  });
+}
+
+const _debugBtn = $("btn-debug-refresh");
+if (_debugBtn) _debugBtn.onclick = renderDebugList;
+
+const _metricsBtn = $("btn-metrics-refresh");
+if (_metricsBtn) _metricsBtn.onclick = renderMetricsChart;
+
 $("btn-calibrate").onclick = async () => {
   $("calibrate-result").textContent = "校準中（約 6 秒）…";
   $("btn-calibrate").disabled = true;
@@ -746,6 +828,16 @@ function initWaveform() {
 }
 
 async function init() {
+  // PWA：註冊 service worker（LAN 手機可「加入主畫面」）
+  if ("serviceWorker" in navigator) {
+    try {
+      await navigator.serviceWorker.register("sw.js");
+      // 推播權限（可選，失敗不影響）
+      if (Notification && Notification.permission === "default") {
+        Notification.requestPermission().catch(() => {});
+      }
+    } catch {}
+  }
   initThemes();
   updateLiveClock();
   setInterval(updateLiveClock, 1000);
@@ -756,6 +848,8 @@ async function init() {
   await renderPersonas();
   await renderReminders();
   refreshMemory();
+  renderDebugList();
+  renderMetricsChart();
   setInterval(() => { refreshMemory($("mem-search").value); renderReminders(); }, 30000);
 }
 init();

@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+*.egg-info/
 
 # 執行資料：對話紀錄、PID、log
 data/
