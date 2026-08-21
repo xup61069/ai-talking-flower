@@ -80,6 +80,7 @@ class LlmConfig:
     timeout_s: float
     recent_turns: int
     persona: str = ""
+    provider: str = "llama_cpp"  # llama_cpp | ollama（自動偵測 base_url 含 11434 時）
 
 
 @dataclass(frozen=True)

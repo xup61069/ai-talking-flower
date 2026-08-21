@@ -8,19 +8,21 @@ from pathlib import Path
 import random
 import time
 
-from .aec import EchoCanceller
-from .asr import SpeechRecognizer
-from .audio import AudioInput, BlockResampler
-from .bus import RestartRequired, RuntimeControl, StatusBus
-from .commands import VoiceCommander
-from .config import Config
-from .llm import LlamaCppClient, SpeechChunker
-from .memory import ConversationMemory
-from .personas import get_persona_by_id, PERSONA_PRESETS
-from .reminders import ReminderScheduler
-from .settings import LiveSettings
-from .tts import TextToSpeech
-from .vad import UtteranceSegmenter
+import numpy as np
+
+from ..aec import EchoCanceller
+from ..asr import SpeechRecognizer
+from ..audio import AudioInput, BlockResampler
+from ..bus import RestartRequired, RuntimeControl, StatusBus
+from ..commands import VoiceCommander
+from ..config import Config
+from ..llm import LlamaCppClient, SpeechChunker
+from ..memory import ConversationMemory
+from ..personas import get_persona_by_id, PERSONA_PRESETS
+from ..reminders import ReminderScheduler
+from ..settings import LiveSettings
+from ..tts import TextToSpeech
+from ..vad import UtteranceSegmenter
 
 # 除錯回放：保留最近 N 段 ASR 輸入音訊供 UI 回放（FLOWER_ASR_DUMP 概念延伸）
 import collections
@@ -437,7 +439,7 @@ class FlowerController:
                     self.bus.publish({"type": "flower_delta", "text": token})
                 if emotion_enabled and speak:
                     try:
-                        from .emotion import detect_emotion_with_style
+                        from ..emotion import detect_emotion_with_style
 
                         emo, style = detect_emotion_with_style("".join(response_parts))
                         if emo != last_emotion[0]:

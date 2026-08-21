@@ -15,7 +15,7 @@ from .audio import list_audio_devices, resolve_device
 from .bus import RestartRequired, RuntimeControl, StatusBus
 from .config import Config, load_config
 from .controller import FlowerController
-from .llm import LlamaCppClient
+from .llm import LlamaCppClient, create_llm_client
 from .memory import ConversationMemory
 from .settings import LiveSettings, SettingsStore
 from .tts import create_tts
@@ -57,7 +57,7 @@ def build_controller(
 ) -> tuple[FlowerController, LlamaCppClient, ConversationMemory]:
     from .metrics import MetricsStore
 
-    llm = LlamaCppClient(config.llm)
+    llm = create_llm_client(config.llm)
     memory = ConversationMemory(config.app.database)
     aec = create_echo_canceller(
         config.aec,
@@ -93,12 +93,13 @@ async def check(config: Config, *, load_asr: bool) -> int:
         print(f"麥克風：找不到（{error}）")
         return 1
     print(f"麥克風：OK（裝置 {index}，{config.audio.input_device}）")
-    llm = LlamaCppClient(config.llm)
+    llm = create_llm_client(config.llm)
     try:
         healthy = await llm.health()
     finally:
         await llm.close()
-    print(f"llama-server：{'OK' if healthy else '無法連線'}")
+    label_llm = "Ollama" if "ollama" in config.llm.base_url.lower() or "11434" in config.llm.base_url else "llama-server"
+    print(f"{label_llm}：{'OK' if healthy else '無法連線'}")
     if not healthy:
         return 1
     try:

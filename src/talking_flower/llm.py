@@ -8,6 +8,113 @@ import httpx
 from .config import LlmConfig
 
 
+class OllamaClient:
+    """Ollama 本地 LLM（/api/chat），介面與 LlamaCppClient 對齊。"""
+
+    def __init__(self, config: LlmConfig) -> None:
+        self.config = config
+        self._client = httpx.AsyncClient(timeout=config.timeout_s)
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def health(self) -> bool:
+        try:
+            base = self.config.base_url.rstrip("/")
+            # Ollama: GET /api/tags 需 200 且可解析
+            response = await self._client.get(f"{base}/api/tags")
+            return response.status_code == 200
+        except (httpx.HTTPError, ValueError):
+            return False
+
+    async def _complete(
+        self,
+        messages: Sequence[dict[str, str]],
+        *,
+        temperature: float,
+        top_p: float,
+        max_tokens: int,
+    ) -> str:
+        payload = {
+            "model": self.config.model.split(":")[0] if ":" in self.config.model else self.config.model,
+            "messages": list(messages),
+            "stream": False,
+            "options": {"temperature": temperature, "top_p": top_p, "num_predict": max_tokens},
+        }
+        url = f"{self.config.base_url.rstrip('/')}/api/chat"
+        response = await self._client.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        return str((data.get("message") or {}).get("content", "")).strip()
+
+    async def stream_reply(
+        self,
+        user_text: str,
+        history: Sequence[dict[str, str]],
+        *,
+        persona: str,
+        temperature: float,
+        top_p: float,
+        max_tokens: int,
+    ) -> AsyncIterator[str]:
+        messages = [{"role": "system", "content": persona}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_text})
+        payload = {
+            "model": self.config.model.split(":")[0] if ":" in self.config.model else self.config.model,
+            "messages": messages,
+            "stream": True,
+            "options": {"temperature": temperature, "top_p": top_p, "num_predict": max_tokens},
+        }
+        url = f"{self.config.base_url.rstrip('/')}/api/chat"
+        async with self._client.stream("POST", url, json=payload) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                content = (event.get("message") or {}).get("content")
+                if content:
+                    yield str(content)
+                if event.get("done"):
+                    break
+
+    async def summarize(self, messages: Sequence[dict[str, str]]) -> str:
+        if not messages:
+            return ""
+        lines = "\n".join(f"{m['role']}: {m['content']}" for m in messages)
+        prompt = (
+            "以下是更早的對話。把它壓成最多三句的中文摘要，"
+            "保留重要的使用者事實與兩人之間關係的變化，不要評論。\n"
+            "內容：\n" + lines[-4000:] + "\n摘要："
+        )
+        try:
+            return await self._complete(
+                [{"role": "user", "content": prompt}],
+                temperature=0.3,
+                top_p=0.9,
+                max_tokens=120,
+            )
+        except httpx.HTTPError:
+            return ""
+
+
+def _is_ollama_url(url: str) -> bool:
+    low = url.lower()
+    return "11434" in low or "ollama" in low
+
+
+def create_llm_client(config: LlmConfig):
+    """依 provider 或 base_url 自動選擇 LlamaCpp / Ollama。"""
+    provider = getattr(config, "provider", "llama_cpp") or "llama_cpp"
+    if provider == "ollama" or _is_ollama_url(config.base_url):
+        return OllamaClient(config)
+    return LlamaCppClient(config)
+
+
 class LlamaCppClient:
     def __init__(self, config: LlmConfig) -> None:
         self.config = config
