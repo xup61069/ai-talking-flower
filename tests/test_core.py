@@ -64,6 +64,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.tts.sample_rate, 24000)
         self.assertFalse(config.interaction.barge_in_enabled)
 
+    @unittest.skipUnless((PROJECT_ROOT / "native" / "webrtc-apm.dll").exists(), "native/webrtc-apm.dll 不在 git（被 gitignore），CI 自動跳過")
     def test_webrtc_aec3_processes_twenty_ms_frame(self) -> None:
         config = load_config(PROJECT_ROOT / "config.toml")
         aec = create_echo_canceller(config.aec, config.audio.sample_rate, PROJECT_ROOT)

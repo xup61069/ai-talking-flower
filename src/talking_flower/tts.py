@@ -256,15 +256,14 @@ class _PcmPlayer:
             if self._resampler_mode == "soxr" and self._resampler is not None:
                 try:
                     samples = self._resampler.resample_chunk(samples).astype(np.float32)
-                except Exception:
-                    # 回退線性
-                    pass
-                # soxr 成功即直接返回
-                if self._resampler_mode == "soxr":
                     return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                except Exception as e:
+                    LOGGER.warning("soxr 重採樣失敗，降級到 scipy/interp：%s", e)
+                    # 降級後落到下方 fallback，不直接返回原 24k 資料
+                    self._resampler_mode = "scipy" if hasattr(self, "_resampler_fn") else "interp"
             if self._resampler_mode == "scipy":
                 try:
-                    # overlap-save 消除邊界瞬態
+                    # overlap-save 消除邊界瞬態（備援路徑，soxr 為主）
                     extended = np.concatenate([self._resampler_tail, samples]) if len(self._resampler_tail) else samples
                     resampled = self._resampler_fn(extended, self._resampler_up, self._resampler_down)  # type: ignore[attr-defined]
                     discard = int(round(len(self._resampler_tail) * self._resampler_up / self._resampler_down)) if len(self._resampler_tail) else 0  # type: ignore[attr-defined]
@@ -277,9 +276,11 @@ class _PcmPlayer:
                     keep = min(len(samples), self._resampler_tail_len)  # type: ignore[attr-defined]
                     self._resampler_tail = samples[-keep:].astype(np.float32) if keep > 0 else np.zeros(0, dtype=np.float32)
                     samples = resampled.astype(np.float32)
-                except Exception:
-                    pass
-                return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                    return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+                except Exception as e:
+                    LOGGER.warning("scipy 重採樣失敗，降級到線性內插：%s", e)
+                    self._resampler_mode = "interp"
+                    # 落到下方線性備援
             # 回退線性
             if self.sample_rate % self.source_rate == 0:
                 factor = self.sample_rate // self.source_rate

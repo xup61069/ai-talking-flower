@@ -177,12 +177,12 @@ class BlockResampler:
             try:
                 out = self._soxr.resample_chunk(frame.astype(np.float32))
                 return out.astype(np.float32, copy=False)
-            except Exception:
-                # 回退
-                pass
+            except Exception as e:
+                LOGGER.warning("soxr 重採樣失敗，降級到 scipy/boxcar：%s", e)
+                self._mode = "scipy_stateful" if hasattr(self, "_resample_poly") else "boxcar"
         if getattr(self, "_mode", None) == "scipy_stateful":
             try:
-                # overlap-save：拼接上塊尾部，濾波後切掉前緣瞬態
+                # overlap-save 備援（soxr 為主，此路徑僅備援，不追 bit-exact）
                 extended = np.concatenate([self._tail, frame.astype(np.float32)]) if len(self._tail) else frame.astype(np.float32)
                 resampled = self._resample_poly(extended, self._up, self._down)
                 # 計算應保留的輸出長度與應丟棄的前緣
@@ -198,8 +198,9 @@ class BlockResampler:
                 if len(resampled) > expected:
                     resampled = resampled[:expected]
                 return resampled.astype(np.float32, copy=False)
-            except Exception:
-                pass
+            except Exception as e:
+                LOGGER.warning("scipy 重採樣失敗，降級到 boxcar/interp：%s", e)
+                self._mode = "boxcar"
         # 回退 boxcar
         if getattr(self, "factor", 0) and self.factor > 1:  # type: ignore[attr-defined]
             length = len(frame) - (len(frame) % self.factor)  # type: ignore[attr-defined]
