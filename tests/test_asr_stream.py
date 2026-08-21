@@ -29,10 +29,7 @@ class FakeModel:
     def generate(self, *, input, cache, is_final, **kwargs):
         self.calls.append((len(input), bool(is_final)))
         if self._index < len(self.pieces):
-            piece = self.pieces[self._index]
             self._index += 1
-        else:
-            piece = ""
         cache["seen"] = True
         cumulative = "".join(self.pieces[: self._index])
         # 串流 paraformer 行為：非 final 回傳目前累積、final 回傳全文
@@ -67,7 +64,7 @@ class StreamingSessionTests(unittest.TestCase):
         session = StreamingSession(r)
         for _ in range(30):
             session.feed(self.FRAME)
-        tail = np.full(1600, 0.01, dtype=np.float32)  # 100ms 尾段
+        tail = np.full(1600, 0.01, dtype=np.float32)  # noqa: F841 尾段示意（實際由 buffer 承載）
         result = session.finish()
         # finish 只推論緩衝殘餘（tail 由 controller 餵入或此處直接給 buffer）
         self.assertEqual(r._model.calls[-1][1], True)
