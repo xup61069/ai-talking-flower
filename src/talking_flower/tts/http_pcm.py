@@ -73,7 +73,7 @@ class HttpPcmTTS:
         if player is not None:
             player.abort()
 
-    async def speak(self, text: str, on_first_byte=None) -> None:
+    async def speak(self, text: str, on_first_byte=None, style: str = "") -> None:
         cleaned = clean_speech_text(text)
         if not cleaned.strip():
             return
@@ -97,14 +97,17 @@ class HttpPcmTTS:
         try:
             request_text = self._converter.convert(cleaned) if self._converter is not None else cleaned
             speed = self.live.speed if self.live is not None else self.config.speed
+            payload: dict[str, object] = {
+                "text": request_text,
+                "voice": self.config.voice,
+                "speed": speed,
+            }
+            if style:
+                payload["style"] = style
             async with self._client.stream(
                 "POST",
                 "/v1/tts",
-                json={
-                    "text": request_text,
-                    "voice": self.config.voice,
-                    "speed": speed,
-                },
+                json=payload,
             ) as response:
                 response.raise_for_status()
                 sample_rate = int(response.headers.get("X-Sample-Rate", self.config.sample_rate))

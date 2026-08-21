@@ -92,6 +92,7 @@ class TtsConfig:
     timeout_s: float
     sample_rate: int
     speed: float
+    emotion_enabled: bool = False
 
 
 @dataclass(frozen=True)

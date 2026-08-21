@@ -41,7 +41,8 @@ class WindowsSapiTTS:
         voice = self._ensure_voice()
         voice.Speak(text)
 
-    async def speak(self, text: str, on_first_byte=None) -> None:
+    async def speak(self, text: str, on_first_byte=None, style: str = "") -> None:
+        _ = style  # SAPI 不支援動態風格，忽略
         cleaned = clean_speech_text(text)
         if not cleaned.strip():
             return

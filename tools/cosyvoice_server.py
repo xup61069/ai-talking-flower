@@ -34,6 +34,7 @@ _inference_lock = threading.Lock()
 class SpeechRequest(BaseModel):
     text: str
     speed: float = 1.0
+    style: str = ""  # 單句動態風格（情緒），空字串則沿用全域 _style_instruction
 
 
 class SpeakerRequest(BaseModel):
@@ -41,7 +42,7 @@ class SpeakerRequest(BaseModel):
     text: str
 
 
-def _stream_pcm(text: str, speed: float) -> Iterator[bytes]:
+def _stream_pcm(text: str, speed: float, style: str = "") -> Iterator[bytes]:
     if _model is None:
         raise RuntimeError("CosyVoice 尚未載入")
 
@@ -49,6 +50,7 @@ def _stream_pcm(text: str, speed: float) -> Iterator[bytes]:
     text = re.sub(r"<\|[^|>]*\|>", "", text).strip()
     if not text:
         return
+    style = re.sub(r"<\|[^|>]*\|>", "", style).strip()
 
     started = time.perf_counter()
     first_chunk_at: float | None = None
@@ -58,8 +60,9 @@ def _stream_pcm(text: str, speed: float) -> Iterator[bytes]:
         # 開始前恢復訓練使用的 25，否則後續短句會愈來愈晚才吐出第一段音訊。
         _model.model.token_hop_len = _token_hop_len
         _model.model.token_max_hop_len = 4 * _token_hop_len
-        if _style_instruction:
-            clean_style = re.sub(r"<\|[^|>]*\|>", "", _style_instruction).strip()
+        effective_style = style or _style_instruction
+        if effective_style:
+            clean_style = re.sub(r"<\|[^|>]*\|>", "", effective_style).strip()
             outputs = _model.inference_instruct2(
                 text,
                 clean_style,
@@ -167,7 +170,7 @@ def synthesize(request: SpeechRequest) -> StreamingResponse:
     if _model is None:
         raise HTTPException(status_code=503, detail="CosyVoice 尚未載入")
     return StreamingResponse(
-        _stream_pcm(text, request.speed),
+        _stream_pcm(text, request.speed, request.style),
         media_type="audio/L16",
         headers={
             "X-Sample-Rate": str(_sample_rate),

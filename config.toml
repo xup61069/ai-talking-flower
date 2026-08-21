@@ -88,3 +88,4 @@ base_url = "http://127.0.0.1:50001"
 timeout_s = 60
 sample_rate = 24000
 speed = 0.9
+emotion_enabled = false

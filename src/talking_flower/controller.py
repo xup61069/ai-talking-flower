@@ -380,12 +380,31 @@ class FlowerController:
 
         persona = self._persona_with_summary()
 
+        # 向量語意召回：補充相關過往對話（超越 N 輪 + 摘要）
+        if source == "user":
+            try:
+                hits = self.memory.search_vector(user_text, limit=3)
+                if hits:
+                    history_texts = {h.get("content") for h in history}
+                    filtered = [h for h in hits if h["content"] not in history_texts][:2]
+                    if filtered:
+                        vec_block = "\n".join(f"- {h['content']} ({h['role']})" for h in filtered)
+                        persona += f"\n\n相關過往回憶（僅供參考，勿直接複述）：\n{vec_block}"
+                        if self.bus is not None:
+                            self.bus.publish({"type": "vector_hits", "hits": filtered})
+            except Exception:
+                pass
+
         turn_start = time.monotonic()
         ttft_ms: float = 0.0
         ttfa_ms: float = 0.0
         response_parts: list[str] = []
         chunker = SpeechChunker(soft_split=True)
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        # 情緒語音：輕量關鍵詞檢測，動態切 CosyVoice style
+        emotion_enabled = bool(self._live_value("emotion_enabled", getattr(self.config.tts, "emotion_enabled", False)))
+        current_style = [""]
+        last_emotion = ["neutral"]
 
         async def produce() -> None:
             nonlocal ttft_ms
@@ -408,6 +427,18 @@ class FlowerController:
                 print(token, end="", flush=True)
                 if self.bus is not None:
                     self.bus.publish({"type": "flower_delta", "text": token})
+                if emotion_enabled and speak:
+                    try:
+                        from .emotion import detect_emotion_with_style
+
+                        emo, style = detect_emotion_with_style("".join(response_parts))
+                        if emo != last_emotion[0]:
+                            last_emotion[0] = emo
+                            current_style[0] = style
+                            if self.bus is not None:
+                                self.bus.publish({"type": "emotion", "emotion": emo, "style": style})
+                    except Exception:
+                        pass
                 if speak:
                     for chunk in chunker.feed(token):
                         await speech_queue.put(chunk)
@@ -439,7 +470,8 @@ class FlowerController:
                     if not player_open:
                         await self.tts.begin_turn()
                         player_open = True
-                    await self.tts.speak(chunk, on_first_byte=mark_ttfa)
+                    style = current_style[0] if emotion_enabled else ""
+                    await self.tts.speak(chunk, on_first_byte=mark_ttfa, style=style)
             except asyncio.CancelledError:
                 if player_open:
                     self.tts.abort_turn()

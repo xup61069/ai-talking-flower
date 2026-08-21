@@ -90,6 +90,7 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("tts.timeout_s", "float", "TTS 逾時(秒)", RESTART, 5, 300, 5),
     SettingSpec("tts.sample_rate", "int", "TTS 取樣率", RESTART, 8000, 48000, 1000),
     SettingSpec("tts.speed", "float", "語速", LIVE, 0.5, 2.0, 0.05),
+    SettingSpec("tts.emotion_enabled", "bool", "情緒語氣（CosyVoice 動態風格）", LIVE, default=False),
     SettingSpec(
         "profile.persona_preset",
         "choice",
@@ -312,6 +313,11 @@ class LiveSettings:
         self.listening: bool = True
         self.manual_busy: bool = False
         self.asr_streaming: bool = True
+        self.emotion_enabled: bool = config.tts.emotion_enabled
+        try:
+            self.emotion_enabled = bool(store.value("tts.emotion_enabled"))
+        except (KeyError, AttributeError, ValueError):
+            pass
         self.weather_location: str = "臺北市"
         try:
             self.weather_location = str(store.value("weather.location") or "臺北市")
@@ -328,6 +334,7 @@ class LiveSettings:
         "app.name": "name",
         "tts.volume": "volume",
         "tts.speed": "speed",
+        "tts.emotion_enabled": "emotion_enabled",
         "llm.temperature": "temperature",
         "llm.top_p": "top_p",
         "llm.max_tokens": "max_tokens",

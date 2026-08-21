@@ -233,6 +233,22 @@ def register_routes(app, ctx: AppContext, services: WebServices) -> None:
             return {"messages": []}
         return {"messages": ctx.memory.search(q)}
 
+    @app.get("/api/memory/vector-search")
+    async def memory_vector_search(q: str = "", limit: int = 5) -> dict:
+        if ctx.memory is None:
+            return {"messages": []}
+        if not q.strip():
+            return {"messages": []}
+        try:
+            limit = max(1, min(int(limit), 20))
+        except (TypeError, ValueError):
+            limit = 5
+        try:
+            results = ctx.memory.search_vector(q, limit=limit)
+        except Exception:
+            results = []
+        return {"messages": results}
+
     @app.delete("/api/memory/{message_id}")
     async def memory_delete(message_id: int) -> dict:
         if ctx.memory is None:
