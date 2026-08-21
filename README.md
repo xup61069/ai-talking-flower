@@ -26,6 +26,27 @@ Volt 1 / 麥克風持續收音
 - **Kokoro 引擎**：約 10 秒（預設，極速首音 0.1 秒）
 - **CosyVoice3 引擎**：約 30 秒（擬真人聲、支援風格指令與音色複製）
 
+### 取得 AEC 回音消除 DLL（建議）
+
+`native/webrtc-apm.dll` 因授權因素不在 git 內。沒有它程式仍可執行，但回音消除會關閉（插話/自聽干擾風險）。執行一次：
+
+```powershell
+./tools/fetch_native.ps1
+```
+
+腳本會從 GitHub Release 或本機備份路徑（`tools/native-backup/webrtc-apm.dll`）取得並以 SHA256 校驗。
+
+### 區網暴露與 Token 認證
+
+控制台**預設僅綁 `127.0.0.1:7860`**，安全無虞。若需從手機或其他裝置存取而改用 `--host 0.0.0.0`，請務必設定 Token：
+
+```powershell
+# 在 data/settings.json 加入（或透過 UI 全設定修改 web.auth_token）
+{ "web.auth_token": "你的祕密字串" }
+```
+
+設定後所有 `/api/*` 請求需帶 `X-Auth-Token: 你的祕密字串` header；瀏覽器開啟頁面時會自動彈出輸入框。Token 以 SHA256 儲存，明碼不落盤。
+
 ### 系統環境診斷
 在 PowerShell 中執行以下指令可快速檢查硬體、音效卡、llama-server 與 TTS 服務：
 

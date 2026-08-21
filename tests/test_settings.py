@@ -24,6 +24,52 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class SettingsStoreTests(unittest.TestCase):
+    def test_v1_settings_migrated_to_v2(self) -> None:
+        """無 _schema_version 視為 v1：app.persona_preset 自動遷移並寫回版本。"""
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"app.persona_preset": "night", "tts.volume": 55}),
+                encoding="utf-8",
+            )
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=settings_path,
+            )
+            self.assertEqual(store.value("profile.persona_preset"), "night")
+            self.assertEqual(store._schema_version, 2)
+            # 寫回後檔案含版本標記且舊 key 已移除
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["_schema_version"], 2)
+            self.assertNotIn("app.persona_preset", saved)
+            self.assertIn("profile.persona_preset", saved)
+
+    def test_v2_settings_pass_through(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"_schema_version": 2, "tts.volume": 80}),
+                encoding="utf-8",
+            )
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=settings_path,
+            )
+            self.assertEqual(store.value("tts.volume"), 80)
+            self.assertEqual(store._schema_version, 2)
+
+    def test_new_save_carries_schema_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "settings.json"
+            store = SettingsStore(
+                PROJECT_ROOT / "config.toml",
+                settings_path=settings_path,
+            )
+            store.set("tts.volume", 66)
+            saved = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["_schema_version"], 2)
+            self.assertEqual(saved["tts.volume"], 66)
+
     def test_merge_with_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SettingsStore(

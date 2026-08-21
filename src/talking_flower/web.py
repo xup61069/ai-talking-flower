@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from dataclasses import dataclass, field
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -10,7 +11,7 @@ import subprocess
 import sys
 
 import fastapi
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
@@ -24,6 +25,10 @@ from .settings import LiveSettings, SettingsStore, SPEC_BY_PATH
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -41,7 +46,25 @@ class WebServer:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
         self.app = FastAPI(title="AI 閒聊花花 控制台")
+        self._register_auth()
         self._register()
+
+    def _register_auth(self) -> None:
+        """Token 認證：web.auth_token 存 SHA256；空字串=本機信任模式不擋。"""
+        app = self.app
+        ctx = self.ctx
+
+        @app.middleware("http")
+        async def auth_middleware(request: Request, call_next):
+            expected_hash = str(ctx.store.value("web.auth_token") or "").strip()
+            if expected_hash and request.url.path.startswith("/api/"):
+                provided = (
+                    request.headers.get("X-Auth-Token", "")
+                    or request.query_params.get("token", "")
+                )
+                if not provided or _token_hash(provided) != expected_hash:
+                    return JSONResponse({"ok": False, "reason": "需要有效的 X-Auth-Token"}, status_code=401)
+            return await call_next(request)
 
     def _register(self) -> None:
         app = self.app
@@ -62,6 +85,16 @@ class WebServer:
 
         @app.websocket("/api/ws")
         async def websocket_endpoint(websocket: WebSocket) -> None:
+            # Token 認證：web.auth_token 非空時需帶 X-Auth-Token header 或 ?token=
+            expected_hash = str(ctx.store.value("web.auth_token") or "").strip()
+            if expected_hash:
+                token = (
+                    websocket.headers.get("x-auth-token", "")
+                    or websocket.query_params.get("token", "")
+                )
+                if not token or _token_hash(token) != expected_hash:
+                    await websocket.close(code=4401)
+                    return
             await websocket.accept()
             queue = await ctx.bus.subscribe()
             try:

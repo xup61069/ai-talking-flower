@@ -97,9 +97,26 @@ SPECS: tuple[SettingSpec, ...] = (
         options=("energetic", "night", "work_buddy", "snarky"),
         default="energetic",
     ),
+    # Web 控制台
+    SettingSpec("web.auth_token", "str", "控制台 Token（空=本機信任）", RESTART, default=""),
 )
 
 SPEC_BY_PATH = {spec.path: spec for spec in SPECS}
+
+# settings.json schema 版本；遷移分派表：{來源版: 升級函式}
+SETTINGS_SCHEMA_VERSION = 2
+
+
+def _migrate_v1_to_v2(raw: dict) -> dict:
+    """v1 → v2：app.persona_preset 改為 profile.persona_preset。"""
+    if "app.persona_preset" in raw:
+        raw["profile.persona_preset"] = raw.pop("app.persona_preset")
+    return raw
+
+
+MIGRATIONS: dict[int, callable] = {
+    1: _migrate_v1_to_v2,
+}
 
 
 def set_path(target: dict, path: str, value: object) -> None:
@@ -125,6 +142,7 @@ class SettingsStore:
         )
         self._base = self._read_toml()
         self._overrides: dict[str, object] = {}
+        self._schema_version: int = SETTINGS_SCHEMA_VERSION
         self._load_overrides()
 
     def _read_toml(self) -> dict:
@@ -144,22 +162,29 @@ class SettingsStore:
         if not isinstance(raw, dict):
             LOGGER.warning("settings.json 格式錯誤，忽略")
             return
-        # 舊版遷移：app.persona_preset → profile.persona_preset
+
+        # schema 版本遷移：無 schema_version 視為 v1，逐步升級至最新
+        stored_version = int(raw.pop("_schema_version", 1) or 1)
         migrated = False
-        if "app.persona_preset" in raw and "profile.persona_preset" not in raw:
-            raw["profile.persona_preset"] = raw.pop("app.persona_preset")
-            LOGGER.info("已自動遷移 app.persona_preset → profile.persona_preset")
+        while stored_version < SETTINGS_SCHEMA_VERSION:
+            step = MIGRATIONS.get(stored_version)
+            if step is None:
+                LOGGER.error("缺少 settings schema v%d 的遷移函式，中止於此版", stored_version)
+                break
+            raw = step(raw)
+            stored_version += 1
             migrated = True
-        # 清理舊的特判殘留（若同時存在，保留新）
-        if "app.persona_preset" in raw:
-            raw.pop("app.persona_preset", None)
-            migrated = True
+            LOGGER.info("settings.json 已從 v%d 遷移至 v%d", stored_version - 1, stored_version)
+        if migrated:
+            raw["_schema_version"] = SETTINGS_SCHEMA_VERSION
+
         for path, value in raw.items():
             if path in SPEC_BY_PATH:
                 try:
                     self._overrides[path] = _coerce(SPEC_BY_PATH[path], value)
                 except (TypeError, ValueError) as error:
                     LOGGER.warning("忽略無效的設定 %s=%r：%s", path, value, error)
+        self._schema_version = stored_version
         if migrated:
             try:
                 self._save()
@@ -197,8 +222,10 @@ class SettingsStore:
 
     def _save(self) -> None:
         self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = dict(self._overrides)
+        payload["_schema_version"] = SETTINGS_SCHEMA_VERSION
         self.settings_path.write_text(
-            json.dumps(self._overrides, ensure_ascii=False, indent=2),
+            json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 

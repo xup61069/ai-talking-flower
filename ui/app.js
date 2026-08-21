@@ -289,24 +289,56 @@ function handleEvent(evt) {
 }
 
 function connect() {
-  ws = new WebSocket("ws://" + location.host + "/api/ws");
+  const token = sessionStorage.getItem("flower_token") || "";
+  const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  const url = proto + location.host + "/api/ws" + (token ? "?token=" + encodeURIComponent(token) : "");
+  ws = new WebSocket(url);
   ws.onmessage = (e) => { try { handleEvent(JSON.parse(e.data)); } catch (err) { } };
-  ws.onclose = () => {
+  ws.onclose = (e) => {
+    if (e.code === 4401) {
+      $("state-text").textContent = "需要 Token";
+      promptForToken();
+      return;
+    }
     $("state-text").textContent = "重新連線中…";
     setTimeout(connect, 1500);
   };
 }
 
+function promptForToken() {
+  const existing = sessionStorage.getItem("flower_token") || "";
+  const input = prompt("此控制台已啟用 Token 認證，請輸入 web.auth_token：", existing);
+  if (input !== null) {
+    sessionStorage.setItem("flower_token", input.trim());
+    setTimeout(connect, 300);
+  }
+}
+
+function authHeaders(extra) {
+  const headers = Object.assign({}, extra || {});
+  const token = sessionStorage.getItem("flower_token") || "";
+  if (token) headers["X-Auth-Token"] = token;
+  return headers;
+}
+
 async function post(path, body) {
-  const res = await fetch(path, {
+  let res = await fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(body || {}),
   });
+  if (res.status === 401 && !path.includes("/settings")) {
+    promptForToken();
+    res = await fetch(path, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body || {}),
+    });
+  }
   return res.json();
 }
-async function get(path) { return (await fetch(path)).json(); }
-async function del(path) { return (await fetch(path, { method: "DELETE" })).json(); }
+async function get(path) { return (await fetch(path, { headers: authHeaders() })).json(); }
+async function del(path) { return (await fetch(path, { method: "DELETE", headers: authHeaders() })).json(); }
 
 $("avatar-stage").onclick = async (e) => {
   triggerPokeAnimation(e);
@@ -499,7 +531,7 @@ $("btn-settings-save").onclick = async () => {
   });
   const res = await (await fetch("/api/settings", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ paths }),
   })).json();
   $("settings-status").textContent = res.errors
@@ -596,7 +628,7 @@ async function renderVoices() {
 $("btn-style-save").onclick = async () => {
   const res = await (await fetch("/api/style", {
     method: "PUT",
-    headers: { "Content-Type": "application/json" },
+    headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ style: $("style-text").value }),
   })).json();
   toast(res.ok ? "風格已更新" : "風格儲存失敗", res.ok ? "info" : "warn");
