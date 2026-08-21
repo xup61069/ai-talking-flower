@@ -72,6 +72,12 @@ prompt = """（情境：使用者已經安靜一段時間了。請像朋友隨�
 # 擴充設定：與 Config 分離，避免 schema 分叉；persona_preset 為 UI/指令共享
 persona_preset = "energetic"
 
+[weather]
+# 中央氣象署開放資料授權碼（免費申請 https://opendata.cwa.gov.tw/）
+# 留空時天氣問題交給 LLM 自由回應；設定後「明天會下雨嗎」0ms 直達
+api_key = ""
+location = "臺北市"
+
 [tts]
 # 串流模式：LLM 邊生成邊斷句，首句即時送 TTS 播放；speed 為語速倍率
 backend = "kokoro"

@@ -481,6 +481,26 @@ class FlowerController:
         self._last_activity = time.monotonic()
         name = self._live_value("name", self.config.app.name)
 
+        # 喚醒詞（低成本 ASR 前綴版）：非空時需叫喚醒詞才回應
+        wake_word = str(self._live_value("wake_word", "") or "").strip()
+        if wake_word:
+            if wake_word in text:
+                # 剝掉喚醒詞前綴；剩空字串視為純呼喚，短回應即可
+                text = text.replace(wake_word, "", 1).strip(" ，,。！!？?")
+            else:
+                LOGGER.debug("未含喚醒詞「%s」，忽略：%s", wake_word, text)
+                return
+            if not text:
+                ack = "我在喔！"
+                try:
+                    self._set_state(State.SPEAKING)
+                    await self.tts.begin_turn()
+                    await self.tts.speak(ack)
+                finally:
+                    await self.tts.end_turn()
+                    self._set_state(State.IDLE)
+                return
+
         # 優先嘗試直達語音指令（時間查詢、設定提醒、切換性格、音量語速調整）
         # 直達指令不寫入 memory，避免污染 LLM 上下文（僅作 TTS 回覆）
         cmd = self.commander.try_execute(text, self)

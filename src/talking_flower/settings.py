@@ -99,6 +99,11 @@ SPECS: tuple[SettingSpec, ...] = (
     ),
     # Web 控制台
     SettingSpec("web.auth_token", "str", "控制台 Token（空=本機信任）", RESTART, default=""),
+    # 天氣技能（中央氣象署開放資料）
+    SettingSpec("weather.api_key", "str", "CWA 授權碼（空=天氣交給 LLM）", RESTART, default=""),
+    SettingSpec("weather.location", "str", "預設地點", LIVE, default="臺北市"),
+    # 喚醒詞（低成本 ASR 前綴版）
+    SettingSpec("interaction.wake_word", "str", "喚醒詞（空=隨時聆聽）", LIVE, default=""),
 )
 
 SPEC_BY_PATH = {spec.path: spec for spec in SPECS}
@@ -295,11 +300,21 @@ class LiveSettings:
         self.recent_turns: int = config.llm.recent_turns
         self.persona: str = config.llm.persona
         self.barge_in_enabled: bool = config.interaction.barge_in_enabled
+        # 喚醒詞（低成本版）：非空時需叫喚醒詞才回應；空=隨時聆聽
+        try:
+            self.wake_word: str = str(store.value("interaction.wake_word") or "").strip()
+        except (KeyError, AttributeError, ValueError):
+            self.wake_word = ""
         self.idle_chat_enabled: bool = config.idle_chat.enabled
         self.idle_chat_timeout_s: float = config.idle_chat.timeout_s
         self.idle_chat_prompt: str = config.idle_chat.prompt
         self.listening: bool = True
         self.manual_busy: bool = False
+        self.weather_location: str = "臺北市"
+        try:
+            self.weather_location = str(store.value("weather.location") or "臺北市")
+        except (KeyError, AttributeError, ValueError):
+            pass
         # 持久化的 preset，統一走 profile.persona_preset
         try:
             preset_val = store.value("profile.persona_preset")
@@ -317,6 +332,8 @@ class LiveSettings:
         "llm.recent_turns": "recent_turns",
         "llm.persona": "persona",
         "interaction.barge_in_enabled": "barge_in_enabled",
+        "interaction.wake_word": "wake_word",
+        "weather.location": "weather_location",
         "idle_chat.enabled": "idle_chat_enabled",
         "idle_chat.timeout_s": "idle_chat_timeout_s",
         "idle_chat.prompt": "idle_chat_prompt",
