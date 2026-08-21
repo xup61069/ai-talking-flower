@@ -125,37 +125,38 @@ class SkillsRegistryTests(unittest.TestCase):
         self.assertEqual(calls, ["good"])
 
 
-CWA_FIXTURE = {
-    "records": {
-        "location": [
+def _cwa_fixture() -> dict:
+    """以今天為基準動態產生兩日預報，避免 CI（UTC）與本地時區日期錯位。"""
+    import datetime
+
+    today = datetime.date.today()
+    d0 = today.isoformat()
+    d1 = (today + datetime.timedelta(days=1)).isoformat()
+
+    def wx(name: str, temps: tuple[str, str]) -> list[dict]:
+        return [
             {
-                "weatherElement": [
-                    {
-                        "elementName": "Wx",
-                        "time": [
-                            {"startTime": "2026-08-22 06:00:00", "parameter": {"parameterName": "多雲"}},
-                            {"startTime": "2026-08-23 06:00:00", "parameter": {"parameterName": "短暫陣雨"}},
-                        ],
-                    },
-                    {
-                        "elementName": "MinT",
-                        "time": [
-                            {"startTime": "2026-08-22 06:00:00", "parameter": {"parameterName": "26"}},
-                            {"startTime": "2026-08-23 06:00:00", "parameter": {"parameterName": "25"}},
-                        ],
-                    },
-                    {
-                        "elementName": "MaxT",
-                        "time": [
-                            {"startTime": "2026-08-22 06:00:00", "parameter": {"parameterName": "33"}},
-                            {"startTime": "2026-08-23 06:00:00", "parameter": {"parameterName": "31"}},
-                        ],
-                    },
-                ]
+                "elementName": name,
+                "time": [
+                    {"startTime": f"{d0} 06:00:00", "parameter": {"parameterName": temps[0]}},
+                    {"startTime": f"{d1} 06:00:00", "parameter": {"parameterName": temps[1]}},
+                ],
             }
         ]
+
+    return {
+        "records": {
+            "location": [
+                {
+                    "weatherElement": (
+                        wx("Wx", ("多雲", "短暫陣雨"))
+                        + wx("MinT", ("26", "25"))
+                        + wx("MaxT", ("33", "31"))
+                    )
+                }
+            ]
+        }
     }
-}
 
 
 class WeatherSkillTests(unittest.TestCase):
@@ -165,7 +166,7 @@ class WeatherSkillTests(unittest.TestCase):
 
     def test_fetch_summary_today(self) -> None:
         client = httpx.Client(
-            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=CWA_FIXTURE))
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=_cwa_fixture()))
         )
         summary = fetch_cwa_summary("KEY", "臺北市", "今天", client=client)
         self.assertIsNotNone(summary)
@@ -176,7 +177,7 @@ class WeatherSkillTests(unittest.TestCase):
 
     def test_fetch_summary_tomorrow_rain_hint(self) -> None:
         client = httpx.Client(
-            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=CWA_FIXTURE))
+            transport=httpx.MockTransport(lambda req: httpx.Response(200, json=_cwa_fixture()))
         )
         summary = fetch_cwa_summary("KEY", "臺北市", "明天", client=client)
         self.assertIsNotNone(summary)
@@ -231,6 +232,12 @@ class WeatherSkillTests(unittest.TestCase):
 
 class WakeWordTests(unittest.IsolatedAsyncioTestCase):
     """低成本喚醒詞：ASR 前綴偵測（interaction.wake_word 非空時啟用）。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        # controller 內部有中文 print；CI 主控台非 UTF-8 時需重設（同 main.py 做法）
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     def _make_controller(self, wake_word: str) -> FlowerController:
         config = load_config(PROJECT_ROOT / "config.toml")
