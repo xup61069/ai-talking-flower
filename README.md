@@ -87,3 +87,29 @@ python -m unittest discover -s tests -v
 - **語音風格指令淨化**：自動過濾 `<|...|>` 標籤，防止自回歸 TTS 模型把提示詞或語氣指令唸出來。
 - **多層角色標籤過濾**：自動剃除開頭的 `花花：`、`回答：`、`Assistant:` 等 LLM 前綴。
 - **音訊接縫 20ms 交叉淡化**：消除 TTS 分塊串流時的接縫相位不連續與爆音。
+- **Web 控制台綁定**：預設 `127.0.0.1:7860`，若 `--host 0.0.0.0` 會警告：`/api/action` 可執行 PowerShell、`/api/voice-ref` 可寫檔，切勿暴露公網。
+
+---
+
+## 🔧 更新日誌（2026-08-22 體檢修復）
+
+**P0 關鍵修復（重啟不再丟失、回音更穩）：**
+- `tools/cosyvoice_server.py` 熱載補 `global`（`#1`）：`/reload`、`/speaker` 真正寫入全域，style 即時生效
+- `controller.py` 回答期間持續餵 `aec.process_capture`（`#3`）：濾波器不中斷，恢復聆聽前 500 ms 抑制不掉線
+- `commands.py`/`controller.py` 直達指令不寫 `memory`（`#4` 前半）：「大聲一點」等不再污染 LLM 上下文
+- `commands.py` + `settings.py` 音量/語速/人設同步 `store.set`（`#4` 後半/`#5`）：重啟後保留，`app.persona_preset` 持久化到 `settings.json`
+- `controller.py` 摘要持久化到 `data/summary.txt`（`#7`）：重啟後背景摘要不消失
+
+**P1 品質與量測：**
+- `tools/calibrate_aec.py`（`#2`）：`irfft(rfft(rec)*conj(rfft(ref)))` 正方向 + 零填充線性相關 + 原始波形優先/包絡回退，附 ERLE dB 輸出；修正常繞環到 `N-D` 被砍掉的 bug
+- `src/talking_flower/asr.py`（`#6`）：process 級 `Paraformer` 快取，`RestartRequired` 不重載模型
+- `controller.py` + `tts.py` 真實 TTFA（`#8`）：首個 HTTP 音訊 byte 到達才計時，HUD 不再樂觀
+- `llm.py`/`controller.py`/`config.toml`（`#9`）：`SpeechChunker(soft_split=True)` 預設開啟 + `max_tokens 64→120`，長回覆不截斷、逗號可提前斷句
+- `src/talking_flower/audio.py`/`tts.py`（重採樣升級）：`scipy.signal.resample_poly` 抗混疊取代 boxcar/`np.interp`，支援任意倍率（`pyproject.toml` 新增 `scipy`）
+- `reminders.py`/`controller.py`（`#10`）：`pop_due()` 節流至 `next_due_in()` 排程（50 Hz → 0.2–5 s），並每小時 GC 7 天前的 `spoken=1` 舊提醒
+- `commands.py` 中文數字全量 parser：`二十五分鐘/一個半小時/十一分鐘` 正確解析；`config.toml` 註解修正為串流
+
+**工程：**
+- `ui/` 拆檔：`index.html 1355→272 行` + `ui/theme.css` + `ui/app.js`，維護性大幅提升
+- `.github/workflows/ci.yml`：`ruff` + `unittest` 自動化，Python 3.13
+- `pyproject.toml` / `config.toml` 一致化，README 明確 `scipy` 與 `--host` 安全警告

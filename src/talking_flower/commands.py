@@ -34,24 +34,34 @@ CHINESE_NUMS = {
     "五十": 50,
 }
 
+_DIGITS = {"一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CHINESE_NUM_CHARS = "一二兩三四五六七八九十"
+
 
 def parse_duration_to_seconds(text: str) -> float | None:
-    """將口語時間字串（如『5分鐘』、『半小時』、『1小時』、『30秒』）解析為秒數。"""
+    """將口語時間字串（如『5分鐘』、『半小時』、『1小時』、『30秒』、『二十五分鐘』、『一個半小時』）解析為秒數。"""
     text = text.strip()
-    # 秒
-    m_sec = re.search(r"(\d+|[一二兩三四五六七八九十]+)\s*秒", text)
+    # 秒（含中文 1..99）
+    m_sec = re.search(rf"(\d+|[{_CHINESE_NUM_CHARS}]+)\s*秒", text)
     if m_sec:
         val = _to_num(m_sec.group(1))
         return val if val else None
 
-    # 小時
-    m_hr = re.search(r"(半|\d+|[一二兩三四五六七八九十]+)\s*(?:個)?小時", text)
+    # 小時：先處理「一個半小時 / 2個半小時」
+    m_half_hr = re.search(rf"(\d+|[{_CHINESE_NUM_CHARS}]+)\s*個半\s*(?:小時|鐘)", text)
+    if m_half_hr:
+        val = _to_num(m_half_hr.group(1))
+        if val:
+            return (val + 0.5) * 3600
+
+    # 小時一般（含「半小時」）
+    m_hr = re.search(rf"(半|\d+|[{_CHINESE_NUM_CHARS}]+)\s*(?:個)?\s*小時", text)
     if m_hr:
         val = _to_num(m_hr.group(1))
         return (val * 3600) if val else None
 
     # 分鐘
-    m_min = re.search(r"(\d+|[一二兩三四五六七八九十]+|十五|二十|三十|四十|五十)\s*分鐘?", text)
+    m_min = re.search(rf"(\d+|[{_CHINESE_NUM_CHARS}]+)\s*分鐘?", text)
     if m_min:
         val = _to_num(m_min.group(1))
         return (val * 60) if val else None
@@ -60,12 +70,42 @@ def parse_duration_to_seconds(text: str) -> float | None:
 
 
 def _to_num(s: str) -> float:
+    s = s.strip()
     if s in CHINESE_NUMS:
         return float(CHINESE_NUMS[s])
     try:
+        # 純數字
         return float(s)
     except ValueError:
+        pass
+    # 中文 11-99 合成，如 二十五 / 十五 / 二十 / 十一
+    if not s:
         return 0.0
+    # 若含「十」
+    if "十" in s:
+        if s == "十":
+            return 10.0
+        if s.startswith("十"):
+            # 十一 .. 十九
+            suffix = s[1:]
+            if not suffix:
+                return 10.0
+            # 僅取首字，避免「十一分鐘」被誤判多字
+            return 10.0 + float(_DIGITS.get(suffix[0], 0))
+        # 二十 / 二十一 / 三十五 等
+        idx = s.index("十")
+        tens_char = s[idx - 1] if idx >= 1 else ""
+        tens = _DIGITS.get(tens_char, 0) * 10 if tens_char else 0
+        after = s[idx + 1 :]
+        if not after:
+            return float(tens)
+        # 如 二十五 取 五
+        ones = _DIGITS.get(after[0], 0)
+        return float(tens + ones)
+    # 單字
+    if s in _DIGITS:
+        return float(_DIGITS[s])
+    return 0.0
 
 
 class VoiceCommander:
@@ -88,9 +128,9 @@ class VoiceCommander:
                 reply = f"現在時間是{time_desc}喔！"
             return CommandResult(handled=True, reply=reply, action="time_query")
 
-        # 2. 定時提醒指令（如「5分鐘後提醒我喝水」、「半小時後叫我開會」）
+        # 2. 定時提醒指令（如「5分鐘後提醒我喝水」、「半小時後叫我開會」、「一個半小時後提醒我」）
         remind_match = re.search(
-            r"^(?:幫我)?(?:設定|設)?(?:在)?((?:\d+|[一二兩三四五六七八九十半]+)\s*(?:(?:個)?小時|分鐘?|秒))\s*(?:之)?後\s*(?:提醒我|叫我|通知我)\s*(.+?)[。！!？?]*$",
+            r"^(?:幫我)?(?:設定|設)?(?:在)?((?:半|\d+個半|\d+|[一二兩三四五六七八九十]+個半|[一二兩三四五六七八九十半]+)\s*(?:小時|分鐘?|秒))\s*(?:之)?後\s*(?:提醒我|叫我|通知我)\s*(.+?)[。！!？?]*$",
             text,
         )
         if remind_match:
@@ -135,6 +175,27 @@ class VoiceCommander:
                 if preset.idle_prompt:
                     controller.live.set("idle_chat.prompt", preset.idle_prompt)
                 controller.live.persona_preset = preset.id
+            # 同步持久化，避免重啟後人設回溯
+            store = getattr(controller, "store", None)
+            if store is not None:
+                try:
+                    store.set("llm.persona", preset.persona)
+                    store.set("llm.temperature", preset.temperature)
+                    store.set("llm.top_p", preset.top_p)
+                    store.set("tts.speed", preset.speed)
+                    if preset.idle_prompt:
+                        store.set("idle_chat.prompt", preset.idle_prompt)
+                except (KeyError, TypeError, ValueError):
+                    pass
+                try:
+                    store.set("app.persona_preset", preset.id)
+                except (KeyError, TypeError, ValueError):
+                    # 舊版 settings 尚未有 persona_preset，回退寫 raw json
+                    try:
+                        store._overrides["app.persona_preset"] = preset.id  # type: ignore[attr-defined]
+                        store._save()  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
             if controller.bus is not None:
                 controller.bus.publish({"type": "persona_changed", "id": preset.id, "name": preset.name})
             reply = f"收到！已切換到「{preset.name}」模式囉～🌸"
@@ -146,6 +207,12 @@ class VoiceCommander:
                 current_vol = getattr(controller.live, "volume", 100)
                 new_vol = min(100, current_vol + 15)
                 controller.live.volume = new_vol
+                store = getattr(controller, "store", None)
+                if store is not None:
+                    try:
+                        store.set("tts.volume", new_vol)
+                    except (KeyError, TypeError, ValueError):
+                        pass
                 reply = f"好的，音量已為你調大囉（目前 {new_vol}%）！"
                 return CommandResult(handled=True, reply=reply, action="volume_up")
         elif re.search(r"(小聲一點|音量調小|聲音太大|小點聲)", text):
@@ -153,6 +220,12 @@ class VoiceCommander:
                 current_vol = getattr(controller.live, "volume", 100)
                 new_vol = max(10, current_vol - 15)
                 controller.live.volume = new_vol
+                store = getattr(controller, "store", None)
+                if store is not None:
+                    try:
+                        store.set("tts.volume", new_vol)
+                    except (KeyError, TypeError, ValueError):
+                        pass
                 reply = f"好的，音量已為你調小囉（目前 {new_vol}%）！"
                 return CommandResult(handled=True, reply=reply, action="volume_down")
 
@@ -162,6 +235,12 @@ class VoiceCommander:
                 current_spd = getattr(controller.live, "speed", 0.9)
                 new_spd = min(1.5, round(current_spd + 0.1, 2))
                 controller.live.speed = new_spd
+                store = getattr(controller, "store", None)
+                if store is not None:
+                    try:
+                        store.set("tts.speed", new_spd)
+                    except (KeyError, TypeError, ValueError):
+                        pass
                 reply = f"好喔！語速已加快到 {new_spd} 倍速～"
                 return CommandResult(handled=True, reply=reply, action="speed_up")
         elif re.search(r"(講話慢一點|說話慢一點|語速調慢|講慢點)", text):
@@ -169,6 +248,12 @@ class VoiceCommander:
                 current_spd = getattr(controller.live, "speed", 0.9)
                 new_spd = max(0.5, round(current_spd - 0.1, 2))
                 controller.live.speed = new_spd
+                store = getattr(controller, "store", None)
+                if store is not None:
+                    try:
+                        store.set("tts.speed", new_spd)
+                    except (KeyError, TypeError, ValueError):
+                        pass
                 reply = f"好的～語速已放慢到 {new_spd} 倍速囉。"
                 return CommandResult(handled=True, reply=reply, action="speed_down")
 

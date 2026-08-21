@@ -4,6 +4,7 @@ import asyncio
 import datetime
 from enum import Enum
 import logging
+from pathlib import Path
 import random
 import time
 
@@ -46,6 +47,7 @@ class FlowerController:
         bus: StatusBus | None = None,
         runtime: RuntimeControl | None = None,
         reminders: ReminderScheduler | None = None,
+        store=None,
     ) -> None:
         self.config = config
         self.asr = asr
@@ -56,6 +58,7 @@ class FlowerController:
         self.live = live
         self.bus = bus
         self.runtime = runtime
+        self.store = store
         self.reminders = (
             reminders
             if reminders is not None
@@ -69,6 +72,10 @@ class FlowerController:
         self._summary_count = 0
         self._frame_count = 0
         self._last_asr_ms: float = 0.0
+        self._summary_file = Path(config.project_root) / "data" / "summary.txt"
+        self._load_summary_cache()
+        self._next_reminder_poll = 0.0
+        self._last_reminder_gc = time.monotonic()
 
     def _set_state(self, state: State) -> None:
         if state != self.state:
@@ -139,13 +146,36 @@ class FlowerController:
                 if self.live is not None and (not self.live.listening or self.live.manual_busy):
                     continue
 
-                # 定時提醒事項檢查
+                # 定時提醒事項檢查（節流：僅在下次到期時間到達時才查 DB）
                 if self.state is State.IDLE and self._turn_task is None:
-                    due_list = self.reminders.pop_due()
-                    if due_list:
-                        self._last_activity = time.monotonic()
-                        self._turn_task = asyncio.create_task(self._speak_reminder(due_list[0].text))
-                        continue
+                    now_mono = time.monotonic()
+                    if now_mono >= self._next_reminder_poll:
+                        due_list = self.reminders.pop_due()
+                        if due_list:
+                            self._last_activity = time.monotonic()
+                            self._turn_task = asyncio.create_task(self._speak_reminder(due_list[0].text))
+                            self._next_reminder_poll = time.monotonic() + 0.5
+                            continue
+                        # 沒到期則根據 next_due 排程下次檢查
+                        try:
+                            next_in = self.reminders.next_due_in()
+                        except Exception:
+                            next_in = None
+                        if next_in is None:
+                            self._next_reminder_poll = now_mono + 5.0
+                        elif next_in > 1.0:
+                            self._next_reminder_poll = now_mono + min(next_in, 5.0)
+                        else:
+                            self._next_reminder_poll = now_mono + 0.5
+                    # 定期 GC 舊提醒（>7 天）
+                    if now_mono - self._last_reminder_gc > 3600:
+                        try:
+                            removed = self.reminders.cleanup_old(days=7)
+                            if removed:
+                                LOGGER.info("已清理 %d 筆舊提醒", removed)
+                        except Exception:
+                            pass
+                        self._last_reminder_gc = now_mono
 
                 # 主動碎碎念：安靜超過 timeout 就主動說一句。
                 if (
@@ -160,9 +190,14 @@ class FlowerController:
                     self._last_activity = time.monotonic()
                     self._turn_task = asyncio.create_task(self._idle_chat())
 
-                # 關閉插話時，回答期間直接丟棄麥克風音框。回答結束後上方會再清空佇列，
-                # 避免喇叭回音被當成下一句使用者語音。
+                # 回答期間仍需持續餵 AEC capture 以維持濾波器收斂，僅丟棄 VAD 輸出。
+                # 關閉插話時，回答期間的麥克風音框不送 VAD，但要保持 AEC 狀態。
                 if self._turn_task is not None and not self._barge_in:
+                    # 維持 AEC 收斂，結果直接丟棄
+                    try:
+                        self.aec.process_capture(input_frame)
+                    except Exception:
+                        pass
                     continue
 
                 clean_frame = self.aec.process_capture(input_frame)
@@ -227,10 +262,37 @@ class FlowerController:
             return self.live.recent_turns
         return self.config.llm.recent_turns
 
+    def _load_summary_cache(self) -> None:
+        try:
+            if self._summary_file.is_file():
+                text = self._summary_file.read_text(encoding="utf-8").strip()
+                if text:
+                    self._summary_cache = text
+                    # 避免剛啟動就重建摘要，將 count 設為當前總數
+                    try:
+                        self._summary_count = self.memory.count()
+                    except Exception:
+                        self._summary_count = 0
+                    LOGGER.info("已載入持久化摘要（%d 字）", len(text))
+        except Exception as error:
+            LOGGER.warning("載入摘要失敗：%s", error)
+
+    def _save_summary_cache(self) -> None:
+        try:
+            self._summary_file.parent.mkdir(parents=True, exist_ok=True)
+            self._summary_file.write_text(self._summary_cache, encoding="utf-8")
+        except Exception as error:
+            LOGGER.warning("寫入摘要失敗：%s", error)
+
     def clear_summary(self) -> None:
         """清空舊對話摘要快取。"""
         self._summary_cache = ""
         self._summary_count = 0
+        try:
+            if self._summary_file.is_file():
+                self._summary_file.unlink()
+        except Exception:
+            pass
 
     def _persona_with_summary(self) -> str:
         persona = (self.live.persona if self.live is not None else "") or self.config.llm.persona
@@ -253,6 +315,7 @@ class FlowerController:
                 summary = await self.llm.summarize(self.memory.older_than(self._recent_turns))
                 if summary:
                     self._summary_cache = summary
+                    self._save_summary_cache()
                     LOGGER.info("已建立較早對話摘要（%d 字）", len(summary))
                 self._summary_count = count
 
@@ -262,7 +325,7 @@ class FlowerController:
         ttft_ms: float = 0.0
         ttfa_ms: float = 0.0
         response_parts: list[str] = []
-        chunker = SpeechChunker()
+        chunker = SpeechChunker(soft_split=True)
         speech_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         async def produce() -> None:
@@ -299,7 +362,15 @@ class FlowerController:
             if not speak:
                 return
             player_open = False
-            first_chunk = True
+            # 真實 TTFA：TTS 首個音訊 bytes 到達時才計時
+            ttfa_set = False
+
+            def mark_ttfa():
+                nonlocal ttfa_ms, ttfa_set
+                if not ttfa_set:
+                    ttfa_ms = round((time.monotonic() - turn_start) * 1000, 1)
+                    ttfa_set = True
+
             try:
                 while True:
                     chunk = await speech_queue.get()
@@ -309,10 +380,7 @@ class FlowerController:
                     if not player_open:
                         await self.tts.begin_turn()
                         player_open = True
-                    if first_chunk:
-                        ttfa_ms = round((time.monotonic() - turn_start) * 1000, 1)
-                        first_chunk = False
-                    await self.tts.speak(chunk)
+                    await self.tts.speak(chunk, on_first_byte=mark_ttfa)
             except asyncio.CancelledError:
                 if player_open:
                     self.tts.abort_turn()
@@ -394,13 +462,12 @@ class FlowerController:
         name = self._live_value("name", self.config.app.name)
 
         # 優先嘗試直達語音指令（時間查詢、設定提醒、切換性格、音量語速調整）
+        # 直達指令不寫入 memory，避免污染 LLM 上下文（僅作 TTS 回覆）
         cmd = self.commander.try_execute(text, self)
         if cmd.handled:
             if self.bus is not None:
                 self.bus.publish({"type": "user_text", "text": text})
             print(f"\n你：{text}\n{name}：{cmd.reply}", flush=True)
-            self.memory.add("user", text)
-            self.memory.add("assistant", cmd.reply)
             if self.bus is not None:
                 self.bus.publish({"type": "flower_delta", "text": cmd.reply})
                 self.bus.publish(

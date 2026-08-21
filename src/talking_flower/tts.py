@@ -59,7 +59,7 @@ def clean_speech_text(text: str) -> str:
 
 
 class TextToSpeech(Protocol):
-    async def speak(self, text: str) -> None: ...
+    async def speak(self, text: str, on_first_byte=None) -> None: ...
     async def health(self) -> bool: ...
     async def close(self) -> None: ...
     async def begin_turn(self) -> None: ...
@@ -96,10 +96,15 @@ class WindowsSapiTTS:
         voice = self._ensure_voice()
         voice.Speak(text)
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, on_first_byte=None) -> None:
         cleaned = clean_speech_text(text)
         if not cleaned.strip():
             return
+        if on_first_byte is not None:
+            try:
+                on_first_byte()
+            except Exception:
+                pass
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self._executor, self._speak_sync, cleaned)
 
@@ -224,11 +229,27 @@ class _PcmPlayer:
         samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
         samples *= max(0, min(volume, 100)) / 100.0
         if self.sample_rate != self.source_rate:
-            if self.sample_rate % self.source_rate:
-                raise ValueError("AEC 播放端目前只支援整數倍率升採樣")
-            factor = self.sample_rate // self.source_rate
-            positions = np.arange(len(samples) * factor, dtype=np.float32) / factor
-            samples = np.interp(positions, np.arange(len(samples)), samples).astype(np.float32)
+            try:
+                from math import gcd
+
+                from scipy.signal import resample_poly  # type: ignore
+
+                g = gcd(self.sample_rate, self.source_rate)
+                up = self.sample_rate // g
+                down = self.source_rate // g
+                samples = resample_poly(samples, up, down).astype(np.float32)
+            except Exception:
+                # 回退：整數倍用線性內插，否則近似
+                if self.sample_rate % self.source_rate == 0:
+                    factor = self.sample_rate // self.source_rate
+                    positions = np.arange(len(samples) * factor, dtype=np.float32) / factor
+                    samples = np.interp(positions, np.arange(len(samples)), samples).astype(np.float32)
+                else:
+                    expected_len = int(round(len(samples) * self.sample_rate / self.source_rate))
+                    if expected_len > 0:
+                        x_old = np.arange(len(samples), dtype=np.float32)
+                        x_new = np.linspace(0, len(samples) - 1, expected_len, dtype=np.float32)
+                        samples = np.interp(x_new, x_old, samples).astype(np.float32)
         return (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
     async def write(self, data: bytes) -> None:
@@ -308,7 +329,7 @@ class HttpPcmTTS:
         if player is not None:
             player.abort()
 
-    async def speak(self, text: str) -> None:
+    async def speak(self, text: str, on_first_byte=None) -> None:
         cleaned = clean_speech_text(text)
         if not cleaned.strip():
             return
@@ -318,6 +339,17 @@ class HttpPcmTTS:
         # 直接接起來會聽到規律的爆音；保留上一段尾部與下一段頭部做 20 ms 交叉淡化。
         blend_samples = 480
         blend_carry: np.ndarray | None = None
+        first_byte_fired = False
+
+        def fire_first_byte():
+            nonlocal first_byte_fired
+            if not first_byte_fired and on_first_byte is not None:
+                first_byte_fired = True
+                try:
+                    on_first_byte()
+                except Exception:
+                    pass
+
         try:
             request_text = self._converter.convert(cleaned) if self._converter is not None else cleaned
             speed = self.live.speed if self.live is not None else self.config.speed
@@ -357,6 +389,8 @@ class HttpPcmTTS:
                     await player.write(pcm)
 
                 async for chunk in response.aiter_bytes():
+                    if chunk:
+                        fire_first_byte()
                     data = pending_bytes + chunk
                     aligned = len(data) - len(data) % 2
                     pending_bytes = data[aligned:]

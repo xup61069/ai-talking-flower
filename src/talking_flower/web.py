@@ -218,13 +218,14 @@ class WebServer:
             ctx.store.set("tts.speed", preset.speed)
             if preset.idle_prompt:
                 ctx.store.set("idle_chat.prompt", preset.idle_prompt)
+            ctx.store.set("app.persona_preset", preset.id)
             ctx.live.set("llm.persona", preset.persona)
             ctx.live.set("llm.temperature", preset.temperature)
             ctx.live.set("llm.top_p", preset.top_p)
             ctx.live.set("tts.speed", preset.speed)
             if preset.idle_prompt:
                 ctx.live.set("idle_chat.prompt", preset.idle_prompt)
-            ctx.live.persona_preset = preset.id
+            ctx.live.set("app.persona_preset", preset.id)
             ctx.bus.publish({"type": "persona_changed", "id": preset.id, "name": preset.name})
             return {"ok": True, "id": preset.id, "name": preset.name}
 
@@ -521,6 +522,8 @@ class WebServer:
                 LOGGER.exception("執行 %s 失敗", name)
 
     async def serve(self, host: str, port: int) -> None:
+        if host == "0.0.0.0":
+            LOGGER.warning("Web 控制台綁定到 0.0.0.0：/api/action 可執行 PowerShell、/api/voice-ref 可寫檔，請勿暴露到公網，建議加 token 鑑權")
         ui_dir = self.ctx.store.project_root / "ui"
         if ui_dir.is_dir():
             self.app.mount("/", StaticFiles(directory=str(ui_dir), html=True), name="ui")

@@ -119,7 +119,7 @@ class SpeechChunker:
         *,
         minimum_chars: int = 8,
         maximum_chars: int = 28,
-        soft_split: bool = False,
+        soft_split: bool = True,
     ) -> None:
         self.minimum_chars = minimum_chars
         self.maximum_chars = maximum_chars

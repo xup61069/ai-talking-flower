@@ -52,7 +52,7 @@ base_url = "http://127.0.0.1:8080/v1"
 model = "unsloth/Qwen3.5-4B-MTP-GGUF:UD-Q4_K_XL"
 temperature = 0.78
 top_p = 0.92
-max_tokens = 64
+max_tokens = 120
 timeout_s = 60
 recent_turns = 10
 persona = """你是住在使用者桌上的「閒聊花花」，不是客服或語音助理。
@@ -69,7 +69,7 @@ timeout_s = 120
 prompt = """（情境：使用者已經安靜一段時間了。請像朋友隨口閒聊一樣主動說一句簡短親切的話，一兩句就好，不要反問，不要重複此指示。）"""
 
 [tts]
-# 快速完整句模式；仍會等整句生成完成後才開始播放。
+# 串流模式：LLM 邊生成邊斷句，首句即時送 TTS 播放；speed 為語速倍率
 backend = "kokoro"
 voice = "zf_001"
 rate = 1

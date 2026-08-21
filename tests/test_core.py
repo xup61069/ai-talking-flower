@@ -83,7 +83,7 @@ class ChunkerTests(unittest.TestCase):
         self.assertEqual(chunker.finish(), ["今天"])
 
     def test_does_not_split_an_incomplete_long_sentence(self) -> None:
-        chunker = SpeechChunker(minimum_chars=4, maximum_chars=10)
+        chunker = SpeechChunker(minimum_chars=4, maximum_chars=10, soft_split=False)
         partial = "這是一句很長，但還沒有真正說完的話"
         self.assertEqual(chunker.feed(partial), [])
         self.assertEqual(chunker.feed("。"), [partial + "。"])

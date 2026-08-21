@@ -29,6 +29,47 @@ def delay_samples(
     *,
     top_n: int = 1,
 ) -> tuple[int, list[tuple[int, float]]]:
+    """以掃頻互相關估計 delay，修正相關方向並使用線性相關（零填充）。
+    優先使用原始波形相關（chirp 具尖銳自相關），回退至包絡相關以抗頻響失真。
+    """
+
+    n = len(recorded)
+    N = 1
+    while N < 2 * n:
+        N <<= 1
+    # 線性互相關：rec * conj(ref) 使正 lag 對應 rec 延後（符合實體「播放→收音」）
+    corr_raw_full = np.fft.irfft(np.fft.rfft(recorded, n=N) * np.conj(np.fft.rfft(reference, n=N)), n=N)
+    corr_raw = corr_raw_full[:n].copy()
+    if max_lag < len(corr_raw):
+        corr_raw[max_lag:] = -np.inf
+    peak_raw = float(np.max(corr_raw)) if len(corr_raw) else float("-inf")
+    # 若原始相關有明顯尖峰則採用之（> 5× 均值則視為清晰）
+    use_raw = False
+    if np.isfinite(peak_raw) and peak_raw > 0:
+        mean_abs = float(np.mean(np.abs(corr_raw[:max_lag]))) if max_lag > 0 else 0.0
+        if mean_abs > 0 and peak_raw / (mean_abs + 1e-9) > 5.0:
+            use_raw = True
+    if use_raw:
+        # 在原始相關中取最高峰附近的最早明顯峰（抗多徑：直接音先到）
+        peak_val = peak_raw
+        # 以 0.5*peak 為閾值，從 0 往後掃描，取第一個達標者即為直接路徑
+        # 但對 raw 相關，遠離峰值的 0 區值遠小於 0.5*peak，故不會誤判為 0
+        top: list[tuple[int, float]] = []
+        scanned = 0
+        for lag in range(0, min(max_lag, len(corr_raw))):
+            if corr_raw[lag] >= 0.5 * peak_val:
+                strength = float(corr_raw[lag])
+                top.append((lag, strength))
+                scanned += 1
+                if scanned >= top_n:
+                    break
+        if top:
+            return top[0][0], top
+        # 回退至最大值位置
+        lag = int(np.argmax(corr_raw[:max_lag]))
+        return lag, [(lag, float(corr_raw[lag]))]
+
+    # 回退：包絡相關（抗頻響）
     def envelope(x: np.ndarray, win: int) -> np.ndarray:
         kernel = np.ones(win) / win
         return np.convolve(np.abs(x - x.mean()), kernel, mode="same")
@@ -36,15 +77,18 @@ def delay_samples(
     win = 96  # 2 ms 平滑窗；包絡相關不受喇叭頻率響應與相位失真影響
     eref = envelope(reference, win)
     erec = envelope(recorded, win)
-    n = len(erec)
     ref_pad = np.zeros(n)
     ref_pad[: len(eref)] = eref
-    corr = np.fft.irfft(np.fft.rfft(ref_pad) * np.conj(np.fft.rfft(erec)))
-    corr[max_lag:] = -np.inf  # 只搜尋 0..max_lag 的正延遲（喇叭聲音延遲到達麥克風）
+    corr_full = np.fft.irfft(np.fft.rfft(erec, n=N) * np.conj(np.fft.rfft(ref_pad, n=N)), n=N)
+    corr = corr_full[:n].copy()
+    if max_lag < len(corr):
+        corr[max_lag:] = -np.inf  # 只搜尋 0..max_lag 的正延遲
     peak_val = float(np.max(corr))
-    top: list[tuple[int, float]] = []
+    if not np.isfinite(peak_val) or peak_val <= 0:
+        return -1, []
+    top = []
     scanned = 0
-    for lag in range(0, max_lag):
+    for lag in range(0, min(max_lag, len(corr))):
         if corr[lag] >= 0.5 * peak_val:
             strength = float(corr[lag])
             top.append((lag, strength))
@@ -53,8 +97,28 @@ def delay_samples(
                 break
     if not top:
         return -1, []
-    # 直接路徑先到達：取第一個明顯峰值，而非最高峰值
     return top[0][0], top
+
+
+def estimate_erle(reference: np.ndarray, recorded: np.ndarray, delay: int) -> float:
+    """粗略估計 ERLE (Echo Return Loss Enhancement) dB，回傳 0..inf。"""
+    if delay < 0 or delay >= len(recorded):
+        return 0.0
+    # 對齊後比較能量
+    ref_aligned = np.zeros_like(recorded)
+    copy_len = min(len(reference), len(recorded) - delay)
+    if copy_len > 0:
+        ref_aligned[delay : delay + copy_len] = reference[:copy_len]
+    # 僅在參考有能量的段計算
+    mask = np.abs(ref_aligned) > 1e-4
+    if np.sum(mask) < 100:
+        return 0.0
+    power_rec = float(np.mean(np.square(recorded[mask])))
+    power_res = float(np.mean(np.square(recorded[mask] - ref_aligned[mask] * 0.5)))  # 粗略 0.5 增益
+    if power_res <= 1e-9:
+        return 40.0
+    erle = 10.0 * np.log10(max(power_rec, 1e-9) / max(power_res, 1e-9))
+    return float(np.clip(erle, 0.0, 40.0))
 
 
 def calibrate(
@@ -150,9 +214,11 @@ def calibrate(
         raise RuntimeError("找不到明顯的延遲峰值；請提高喇叭音量或降低環境噪音")
     # 峰值位置即為輸出→輸入的總延遲（含 stream 啟動時差，與 app 真實路徑一致）
     delay_ms = round(lag / sample_rate * 1000 / 5) * 5
+    erle_db = estimate_erle(reference, mic, lag)
+    LOGGER.info("ERLE 粗估：%.1f dB（>10 dB 表示回音路徑清晰）", erle_db)
     if lag < chirp_start:
         LOGGER.warning("峰值早於掃頻起點（%d ms），stream 啟動時差為負；仍以峰值位置為準", round(lag / sample_rate * 1000))
-    LOGGER.info("估計延遲：%d ms（峰值在 %d ms）", delay_ms, round(lag / sample_rate * 1000))
+    LOGGER.info("估計延遲：%d ms（峰值在 %d ms，ERLE %.1f dB）", delay_ms, round(lag / sample_rate * 1000), erle_db)
     return delay_ms
 
 

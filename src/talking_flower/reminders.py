@@ -129,5 +129,24 @@ class ReminderScheduler:
             for r in rows
         ]
 
+    def next_due_in(self) -> float | None:
+        """回傳距離下一個未響提醒的秒數，未找到回傳 None。"""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT trigger_at FROM reminders WHERE spoken = 0 ORDER BY trigger_at ASC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return max(0.0, float(row[0]) - time.time())
+
+    def cleanup_old(self, days: int = 7) -> int:
+        """刪除已響且超過 days 天的舊提醒，回傳刪除筆數。"""
+        cutoff = time.time() - days * 86400
+        with self._lock, self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM reminders WHERE spoken = 1 AND trigger_at < ?", (cutoff,)
+            )
+            return cursor.rowcount
+
     def close(self) -> None:
         self._connection.close()

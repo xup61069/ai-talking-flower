@@ -26,6 +26,10 @@ class SpeechRecognizer(Protocol):
     async def transcribe(self, audio: np.ndarray, sample_rate: int) -> str: ...
 
 
+# process 級模型快取，避免 RestartRequired 重建時重複載入 Paraformer
+_MODEL_CACHE: dict[tuple[str, str], object] = {}
+
+
 class FunASRStreamingRecognizer:
     def __init__(self, config: AsrConfig) -> None:
         self.config = config
@@ -34,8 +38,15 @@ class FunASRStreamingRecognizer:
     async def load(self) -> None:
         if self._model is not None:
             return
+        cache_key = (self.config.model, self.config.device)
+        cached = _MODEL_CACHE.get(cache_key)
+        if cached is not None:
+            self._model = cached
+            LOGGER.info("沿用已快取的 ASR 模型：%s", self.config.model)
+            return
         LOGGER.info("載入語音辨識模型：%s（第一次可能需要下載）", self.config.model)
         await asyncio.to_thread(self._load_sync)
+        _MODEL_CACHE[cache_key] = self._model
         LOGGER.info("語音辨識模型已就緒")
 
     def _load_sync(self) -> None:

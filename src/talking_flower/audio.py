@@ -127,19 +127,55 @@ class AudioInput:
 
 
 class BlockResampler:
+    """高品質重採樣，優先使用 scipy.signal.resample_poly，缺省回退 boxcar。"""
+
     def __init__(self, source_rate: int, target_rate: int) -> None:
         self.source_rate = source_rate
         self.target_rate = target_rate
-        if source_rate % target_rate != 0:
-            raise ValueError("第一版只支援整數比例降採樣")
-        self.factor = source_rate // target_rate
+        if source_rate == target_rate:
+            self.factor = 1
+            self._use_poly = False
+            return
+        # 嘗試 polyphase，若不可用則回退整數倍 boxcar
+        try:
+            from math import gcd
+
+            from scipy.signal import resample_poly  # type: ignore
+
+            g = gcd(source_rate, target_rate)
+            self._up = target_rate // g
+            self._down = source_rate // g
+            self._resample_poly = resample_poly  # type: ignore
+            self._use_poly = True
+            self.factor = source_rate // target_rate if source_rate % target_rate == 0 else 0
+        except Exception:
+            if source_rate % target_rate != 0:
+                raise ValueError("scipy 未安裝時只支援整數比例降採樣")
+            self._use_poly = False
+            self.factor = source_rate // target_rate
 
     def process(self, frame: np.ndarray) -> np.ndarray:
-        if self.factor == 1:
+        if self.source_rate == self.target_rate:
             return frame.astype(np.float32, copy=False)
-        length = len(frame) - (len(frame) % self.factor)
-        if length <= 0:
+        if self._use_poly:
+            try:
+                # resample_poly 自帶抗混疊 FIR，優於 boxcar 平均
+                out = self._resample_poly(frame.astype(np.float32), self._up, self._down)
+                return out.astype(np.float32, copy=False)
+            except Exception:
+                pass
+        # 回退：boxcar 平均
+        if getattr(self, "factor", 0) and self.factor > 1:
+            length = len(frame) - (len(frame) % self.factor)
+            if length <= 0:
+                return np.empty(0, dtype=np.float32)
+            reshaped = frame[:length].reshape(-1, self.factor)
+            return reshaped.mean(axis=1, dtype=np.float32)
+        # 非整數且無 scipy，線性內插近似
+        expected_len = int(round(len(frame) * self.target_rate / self.source_rate))
+        if expected_len <= 0:
             return np.empty(0, dtype=np.float32)
-        reshaped = frame[:length].reshape(-1, self.factor)
-        return reshaped.mean(axis=1, dtype=np.float32)
+        x_old = np.arange(len(frame), dtype=np.float32)
+        x_new = np.linspace(0, len(frame) - 1, expected_len, dtype=np.float32)
+        return np.interp(x_new, x_old, frame).astype(np.float32)
 

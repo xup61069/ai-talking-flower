@@ -52,6 +52,7 @@ def build_controller(
     live: LiveSettings | None = None,
     bus: StatusBus | None = None,
     runtime: RuntimeControl | None = None,
+    store: SettingsStore | None = None,
 ) -> tuple[FlowerController, LlamaCppClient, ConversationMemory]:
     llm = LlamaCppClient(config.llm)
     memory = ConversationMemory(config.app.database)
@@ -70,6 +71,7 @@ def build_controller(
         live=live,
         bus=bus,
         runtime=runtime,
+        store=store,
     )
     return controller, llm, memory
 
@@ -163,6 +165,7 @@ async def run(args: argparse.Namespace, config_path: Path) -> int:
                 live=live,
                 bus=bus,
                 runtime=runtime,
+                store=store,
             )
             if ctx is not None:
                 ctx.controller, ctx.llm, ctx.memory = controller, llm, memory

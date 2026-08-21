@@ -115,6 +115,7 @@ def health() -> dict[str, object]:
 @app.post("/reload")
 def reload_style() -> dict[str, object]:
     """熱載 voice/style.txt，不必重啟整個 server。"""
+    global _style_instruction
     if _model is None:
         raise HTTPException(status_code=503, detail="CosyVoice 尚未載入")
     if _style_file is None:
@@ -134,6 +135,7 @@ def reload_style() -> dict[str, object]:
 @app.post("/speaker")
 def set_speaker(request: SpeakerRequest) -> dict[str, object]:
     """熱載參考音檔＋逐字稿（換聲線），不必重啟整個 server。"""
+    global _prompt_text, _prompt_wav
     if _model is None:
         raise HTTPException(status_code=503, detail="CosyVoice 尚未載入")
     wav = Path(request.wav)

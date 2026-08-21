@@ -89,6 +89,14 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("tts.timeout_s", "float", "TTS 逾時(秒)", RESTART, 5, 300, 5),
     SettingSpec("tts.sample_rate", "int", "TTS 取樣率", RESTART, 8000, 48000, 1000),
     SettingSpec("tts.speed", "float", "語速", LIVE, 0.5, 2.0, 0.05),
+    SettingSpec(
+        "app.persona_preset",
+        "choice",
+        "性格預設",
+        LIVE,
+        options=("energetic", "night", "work_buddy", "snarky"),
+        default="energetic",
+    ),
 )
 
 SPEC_BY_PATH = {spec.path: spec for spec in SPECS}
@@ -150,12 +158,23 @@ class SettingsStore:
         return raw
 
     def load_config(self) -> Config:
-        return config_from_raw(self.project_root, self.merged_raw())
+        raw = self.merged_raw()
+        # 過濾掉非 Config 的擴充設定（如 app.persona_preset）
+        if "app" in raw and "persona_preset" in raw["app"]:
+            raw = deepcopy(raw)
+            raw["app"] = {k: v for k, v in raw["app"].items() if k != "persona_preset"}
+        return config_from_raw(self.project_root, raw)
 
     def value(self, path: str) -> object:
         if path in self._overrides:
             return self._overrides[path]
-        return get_path(self._base, path)
+        try:
+            return get_path(self._base, path)
+        except KeyError:
+            spec = SPEC_BY_PATH.get(path)
+            if spec is not None and spec.default is not None:
+                return spec.default
+            raise
 
     def set(self, path: str, value: object) -> None:
         spec = SPEC_BY_PATH.get(path)
@@ -243,7 +262,16 @@ class LiveSettings:
         self.idle_chat_prompt: str = config.idle_chat.prompt
         self.listening: bool = True
         self.manual_busy: bool = False
-        self.persona_preset: str = "energetic"
+        # 持久化的 preset，若 store 已有覆蓋則沿用
+        try:
+            preset_val = store.value("app.persona_preset")
+            self.persona_preset: str = str(preset_val) if preset_val else "energetic"
+        except (KeyError, AttributeError, ValueError):
+            # 舊 settings.json 可能沒有此 key，回退到直接讀 overrides
+            try:
+                self.persona_preset = str(store._overrides.get("app.persona_preset", "energetic"))  # type: ignore[attr-defined]
+            except Exception:
+                self.persona_preset = "energetic"
 
     LIVE_PATHS: dict[str, str] = {
         "app.name": "name",
@@ -258,6 +286,7 @@ class LiveSettings:
         "idle_chat.enabled": "idle_chat_enabled",
         "idle_chat.timeout_s": "idle_chat_timeout_s",
         "idle_chat.prompt": "idle_chat_prompt",
+        "app.persona_preset": "persona_preset",
     }
 
     def set(self, path: str, value: object) -> bool:
