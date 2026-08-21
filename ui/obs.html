@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>花花 OBS 覆蓋</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; }
+  body { font-family: -apple-system, "Microsoft JhengHei", sans-serif; color: #fff; }
+  /* 底部字幕條 */
+  #subtitle-bar {
+    position: fixed; left: 3%; right: 3%; bottom: 6%;
+    background: rgba(18, 20, 30, 0.88); border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px; padding: 14px 18px; backdrop-filter: blur(12px);
+    display: none; box-shadow: 0 8px 32px rgba(0,0,0,0.45);
+  }
+  #subtitle-bar.show { display: block; animation: slideUp 0.25s ease-out; }
+  @keyframes slideUp { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  #subtitle-role { font-size: 12px; color: #9da2b8; letter-spacing: 0.08em; text-transform: uppercase; }
+  #subtitle-text { font-size: 20px; line-height: 1.55; margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
+  #subtitle-text.user { color: #9df0ff; }
+  #subtitle-text.flower { color: #ffb3d6; }
+  /* 右上角狀態膠囊（可選顯示） */
+  #status-pill {
+    position: fixed; top: 2.5%; right: 2.5%;
+    background: rgba(22,23,31,0.75); border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px; padding: 6px 14px; font-size: 13px; display: flex; align-items: center; gap: 8px;
+  }
+  #status-dot { width: 9px; height: 9px; border-radius: 50%; background: #6b7086; transition: all 0.25s; }
+  #status-dot.speaking { background: #ff6ea3; box-shadow: 0 0 10px #ff6ea3; }
+  #status-dot.listening { background: #4ee49d; box-shadow: 0 0 10px #4ee49d; }
+  #status-dot.thinking { background: #ffb84d; box-shadow: 0 0 10px #ffb84d; }
+  /* 綠幕提示（OBS 未設透明時可見） */
+  #hint { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+          background: #00ff00; color: #000; font-size: 14px; z-index: -1; }
+</style>
+</head>
+<body>
+<div id="hint">OBS 請將此來源設為「瀏覽器來源」並勾選「允許透明度」</div>
+<div id="status-pill"><span id="status-dot"></span><span id="status-text">等待說話</span></div>
+<div id="subtitle-bar">
+  <div id="subtitle-role"></div>
+  <div id="subtitle-text"></div>
+</div>
+<script>
+(function () {
+  const roleEl = document.getElementById("subtitle-role");
+  const textEl = document.getElementById("subtitle-text");
+  const bar = document.getElementById("subtitle-bar");
+  const dot = document.getElementById("status-dot");
+  const stateEl = document.getElementById("status-text");
+  let hideTimer = null;
+  let ws = null;
+
+  function setSubtitle(role, text) {
+    if (!text) return;
+    roleEl.textContent = role === "user" ? "你" : "🌸 花花";
+    textEl.textContent = text;
+    textEl.className = role;
+    bar.classList.add("show");
+    clearTimeout(hideTimer);
+    // 花花說話時字幕跟隨 speaking 狀態自動延長，否則 6 秒後淡出
+    hideTimer = setTimeout(() => bar.classList.remove("show"), 7000);
+  }
+
+  function setState(s) {
+    stateEl.textContent = s;
+    dot.className = s.includes("說話") ? "speaking" : s.includes("正在聽") ? "listening" : s.includes("思考") || s.includes("辨識") ? "thinking" : "";
+    if (s.includes("說話")) {
+      // 說話期間字幕常駐
+      clearTimeout(hideTimer);
+      bar.classList.add("show");
+    } else if (s === "等待說話") {
+      hideTimer = setTimeout(() => bar.classList.remove("show"), 2500);
+    }
+  }
+
+  // URL 參數：?token=xxx 用於鑑權；?hideStatus=1 隱藏狀態膠囊；?fontSize=22 自訂字級
+  const params = new URLSearchParams(location.search);
+  if (params.get("hideStatus") === "1") document.getElementById("status-pill").style.display = "none";
+  const fs = parseInt(params.get("fontSize") || "", 10);
+  if (fs) textEl.style.fontSize = fs + "px";
+
+  // 支援 ?host=192.168.1.10:7860 跨機連線（OBS 與花花不在同機時）
+  const host = params.get("host") || location.host;
+  const proto = location.protocol === "https:" ? "wss://" : "ws://";
+  const token = params.get("token") || sessionStorage.getItem("flower_token") || "";
+  const wsUrl = proto + host + "/api/ws" + (token ? "?token=" + encodeURIComponent(token) : "");
+
+  let currentFlower = "";
+  function connect() {
+    ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        switch (evt.type) {
+          case "state": setState(evt.state); break;
+          case "user_text":
+            currentFlower = "";
+            setSubtitle("user", evt.text);
+            break;
+          case "flower_delta":
+            currentFlower += evt.text;
+            setSubtitle("flower", currentFlower);
+            break;
+          case "asr_partial":
+            setSubtitle("user", evt.text + "…");
+            break;
+          case "emotion":
+            // 可選：在字幕角落顯示情緒標籤（除錯用）
+            // console.log("emotion", evt.emotion);
+            break;
+        }
+      } catch {}
+    };
+    ws.onclose = () => setTimeout(connect, 1500);
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

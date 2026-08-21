@@ -37,6 +37,9 @@ pet = [
   "Pillow>=10,<12",
   "pynput>=1.7,<2",
 ]
+discord = [
+  "discord.py>=2.3,<3",
+]
 
 [project.scripts]
 talking-flower = "talking_flower.main:main"
