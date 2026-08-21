@@ -1,130 +1,23 @@
+"""PCM 播放器：有狀態重採樣、AEC render 參考、真實 RMS 回傳、靜音保水。"""
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import queue
 import threading
-import re
-from typing import Protocol
 
-import httpx
 import numpy as np
-from opencc import OpenCC
 import sounddevice as sd
 
-from .aec import BypassEchoCanceller, EchoCanceller
-from .audio import resolve_device
-from .config import AudioConfig, TtsConfig
-from .settings import LiveSettings
+from ..aec import EchoCanceller
+from ..settings import LiveSettings
 
 
 LOGGER = logging.getLogger(__name__)
 
-EMOJI_PATTERN = re.compile(
-    r"[\U0001F300-\U0001FAFF\u2600-\u26FF\u2700-\u27BF]+",
-    flags=re.UNICODE,
-)
 
-
-def clean_speech_text(text: str) -> str:
-    """過濾 Markdown 標記、Emoji、舞臺動作指示、角色前綴與提示詞殘留，回傳適合直接朗讀的純文字。"""
-    if not text:
-        return ""
-    # 去除特殊標籤如 <|endofprompt|> 等
-    text = re.sub(r"<\|[^|>]*\|>", "", text)
-    # 去除程式碼區塊與 Markdown
-    text = re.sub(r"```[\s\S]*?```", "", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    text = re.sub(r"\*([^*]+)\*", r"\1", text)
-    text = re.sub(r"~~([^~]+)~~", r"\1", text)
-    text = re.sub(r"^\s*#{1,6}\s*", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
-    # 去除括號內動作或舞臺指示
-    text = re.sub(r"（[^）]*）", "", text)
-    text = re.sub(r"\([^)]*\)", "", text)
-    text = re.sub(r"【[^】]*】", "", text)
-    text = re.sub(r"\[[^\]]*\]", "", text)
-    # 去除常見的 LLM 角色自稱與回覆標頭前綴（例如「花花：」、「回答：」等）
-    text = re.sub(r"^(?:花花|助理|Assistant|AI|模型|回答|回覆)\s*[：:]\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^(?:你注意到使用者已經安靜|主動說一句適合此刻的話)[^：:。\n]*[：:。\n]\s*", "", text)
-    text = EMOJI_PATTERN.sub("", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{2,}", "\n", text)
-    return text.strip()
-
-
-
-class TextToSpeech(Protocol):
-    async def speak(self, text: str, on_first_byte=None) -> None: ...
-    async def health(self) -> bool: ...
-    async def close(self) -> None: ...
-    async def begin_turn(self) -> None: ...
-    async def end_turn(self) -> None: ...
-    def abort_turn(self) -> None: ...
-
-
-class WindowsSapiTTS:
-    def __init__(self, config: TtsConfig) -> None:
-        self.config = config
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="flower-tts")
-        self._voice = None
-
-    def _ensure_voice(self):
-        if self._voice is not None:
-            return self._voice
-        import pythoncom
-        import win32com.client
-
-        pythoncom.CoInitialize()
-        voice = win32com.client.Dispatch("SAPI.SpVoice")
-        for token in voice.GetVoices():
-            if self.config.voice.casefold() in token.GetDescription().casefold():
-                voice.Voice = token
-                break
-        else:
-            LOGGER.warning("找不到指定 SAPI 聲音 %s，使用系統預設", self.config.voice)
-        voice.Rate = self.config.rate
-        voice.Volume = self.config.volume
-        self._voice = voice
-        return voice
-
-    def _speak_sync(self, text: str) -> None:
-        voice = self._ensure_voice()
-        voice.Speak(text)
-
-    async def speak(self, text: str, on_first_byte=None) -> None:
-        cleaned = clean_speech_text(text)
-        if not cleaned.strip():
-            return
-        if on_first_byte is not None:
-            try:
-                on_first_byte()
-            except Exception:
-                pass
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(self._executor, self._speak_sync, cleaned)
-
-    async def health(self) -> bool:
-        return True
-
-    async def begin_turn(self) -> None:
-        return
-
-    async def end_turn(self) -> None:
-        return
-
-    def abort_turn(self) -> None:
-        return
-
-    async def close(self) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=True)
-
-
-class _PcmPlayer:
+class PcmPlayer:
     def __init__(
         self,
         source_rate: int,
@@ -227,7 +120,7 @@ class _PcmPlayer:
                             reference = np.frombuffer(audio_frame, dtype="<i2").astype(np.float32)
                             self.aec.process_render(reference / 32768.0)
                         stream.write(audio_frame)
-                        # 真實播放音量回傳（R4-2 已使 publish 執行緒安全）
+                        # 真實播放音量回傳（bus.publish 已執行緒安全）
                         self._rms_counter += 1
                         if self.bus is not None and self._rms_counter % self._rms_frame_stride == 0:
                             try:
@@ -350,172 +243,5 @@ class _PcmPlayer:
             pass
 
 
-class HttpPcmTTS:
-    def __init__(
-        self,
-        config: TtsConfig,
-        audio: AudioConfig,
-        aec: EchoCanceller,
-        live: LiveSettings | None = None,
-        bus=None,
-    ) -> None:
-        self.config = config
-        self.aec = aec
-        self.live = live
-        self.bus = bus
-        self._converter = OpenCC("t2s") if config.backend == "kokoro" else None
-        self._client = httpx.AsyncClient(
-            base_url=config.base_url.rstrip("/"),
-            timeout=httpx.Timeout(config.timeout_s, connect=5.0),
-        )
-        self._device: int | None = None
-        if audio.output_device:
-            self._device = resolve_device(
-                audio.output_device,
-                audio.output_hostapi,
-                input_device=False,
-            )
-        # 一輪對話只建立一個播放器：第一句的音訊還在播放時，下一句的音訊
-        # 已經開始生成並送入佇列，句子之間不會因為 TTS 生成而停頓。
-        self._turn_player: _PcmPlayer | None = None
-        self._in_turn = False
-
-    async def health(self) -> bool:
-        try:
-            response = await self._client.get("/health")
-            response.raise_for_status()
-            return response.json().get("status") == "ok"
-        except (httpx.HTTPError, ValueError):
-            return False
-
-    async def begin_turn(self) -> None:
-        self._turn_player = None
-        self._in_turn = True
-
-    async def end_turn(self) -> None:
-        self._in_turn = False
-        player, self._turn_player = self._turn_player, None
-        if player is not None:
-            await player.finish()
-
-    def abort_turn(self) -> None:
-        self._in_turn = False
-        player, self._turn_player = self._turn_player, None
-        if player is not None:
-            player.abort()
-
-    async def speak(self, text: str, on_first_byte=None) -> None:
-        cleaned = clean_speech_text(text)
-        if not cleaned.strip():
-            return
-
-        owned: _PcmPlayer | None = None
-        # CosyVoice stream=True 的分塊接縫相位不連續（每個 chunk 開頭能量歸零），
-        # 直接接起來會聽到規律的爆音；保留上一段尾部與下一段頭部做 20 ms 交叉淡化。
-        blend_samples = 480
-        blend_carry: np.ndarray | None = None
-        first_byte_fired = False
-
-        def fire_first_byte():
-            nonlocal first_byte_fired
-            if not first_byte_fired and on_first_byte is not None:
-                first_byte_fired = True
-                try:
-                    on_first_byte()
-                except Exception:
-                    pass
-
-        try:
-            request_text = self._converter.convert(cleaned) if self._converter is not None else cleaned
-            speed = self.live.speed if self.live is not None else self.config.speed
-            async with self._client.stream(
-                "POST",
-                "/v1/tts",
-                json={
-                    "text": request_text,
-                    "voice": self.config.voice,
-                    "speed": speed,
-                },
-            ) as response:
-                response.raise_for_status()
-                sample_rate = int(response.headers.get("X-Sample-Rate", self.config.sample_rate))
-                player = self._turn_player
-                if player is None:
-                    player = _PcmPlayer(
-                        sample_rate,
-                        self._device,
-                        self.config.volume,
-                        self.aec,
-                        self.live,
-                        self.bus,
-                    )
-                    if self._in_turn:
-                        self._turn_player = player
-                    else:
-                        owned = player
-                received = 0
-                # httpx chunk 不保證對齊取樣邊界；若直接把奇數位元組切掉，
-                # 後續全部樣本會錯位變成雜訊，所以要保留未對齊的位元組給下一段。
-                pending_bytes = b""
-
-                async def write_samples(samples: np.ndarray) -> None:
-                    nonlocal received
-                    pcm = (np.clip(samples, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
-                    received += len(pcm)
-                    await player.write(pcm)
-
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        fire_first_byte()
-                    data = pending_bytes + chunk
-                    aligned = len(data) - len(data) % 2
-                    pending_bytes = data[aligned:]
-                    if not aligned:
-                        continue
-                    samples = np.frombuffer(data[:aligned], dtype="<i2").astype(np.float32) / 32768.0
-                    if blend_carry is not None:
-                        if len(samples) >= blend_samples:
-                            ramp = np.linspace(0.0, 1.0, blend_samples, dtype=np.float32)
-                            samples[:blend_samples] = (
-                                samples[:blend_samples] * ramp + blend_carry * (1.0 - ramp)
-                            )
-                            blend_carry = None
-                        else:
-                            samples = np.concatenate([blend_carry, samples])
-                            blend_carry = None
-                    if len(samples) > blend_samples:
-                        blend_carry = samples[-blend_samples:].copy()
-                        samples = samples[:-blend_samples]
-                    await write_samples(samples)
-                if blend_carry is not None:
-                    await write_samples(blend_carry)
-                if received == 0:
-                    raise RuntimeError("TTS 沒有回傳任何音訊")
-        except asyncio.CancelledError:
-            if owned is not None:
-                owned.abort()
-            raise
-        except httpx.HTTPError as error:
-            if owned is not None:
-                owned.abort()
-            raise RuntimeError(f"TTS 連線失敗：{error}") from error
-        finally:
-            if owned is not None:
-                await owned.finish()
-
-    async def close(self) -> None:
-        await self._client.aclose()
-
-
-def create_tts(
-    config: TtsConfig,
-    audio: AudioConfig,
-    aec: EchoCanceller | None = None,
-    live: LiveSettings | None = None,
-    bus=None,
-) -> TextToSpeech:
-    if config.backend == "windows_sapi":
-        return WindowsSapiTTS(config)
-    if config.backend in {"cosyvoice", "kokoro"}:
-        return HttpPcmTTS(config, audio, aec or BypassEchoCanceller(audio.sample_rate), live, bus)
-    raise ValueError(f"不支援的 TTS backend：{config.backend}")
+# 舊名稱相容別名（tests 直接引用 _PcmPlayer）
+_PcmPlayer = PcmPlayer

@@ -1,0 +1,11 @@
+# 核心依賴鎖定（由 uv.lock 產生，此檔供無 uv 環境快速安裝）
+# 產生日期：2026-08-22（Python 3.13 / Windows）
+
+httpx==0.28.1
+numpy==2.4.4
+opencc-python-reimplemented==0.1.7
+scipy==1.18.0
+soxr==1.1.0
+sounddevice==0.5.5
+fastapi==0.135.2
+uvicorn==0.42.0

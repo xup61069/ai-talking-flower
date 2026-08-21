@@ -2,6 +2,10 @@
 
 一個住在你桌上的智慧語音陪伴角色：**收音 → 回音消除 → 語音辨識 → 思考決策 → 語音直達指令 / 串流語音合成**。全部在本機端離線流暢執行，隱私安全無憂。
 
+![版本](https://img.shields.io/badge/version-0.1.0-ff6ea3) ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-4ee49d) [![CI](https://github.com/xup61069/ai-talking-flower/actions/workflows/ci.yml/badge.svg)](https://github.com/xup61069/ai-talking-flower/actions/workflows/ci.yml)
+
+> 變更紀錄見 [CHANGELOG.md](CHANGELOG.md)。
+
 ---
 
 ## 🌟 核心特色與架構
