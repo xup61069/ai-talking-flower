@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 
 # 輕量關鍵詞情緒辨識：無模型，零依賴，適合本機即時
 # 若未來要更準，可在此替換為 LLM 小模型或 bge 情感分類

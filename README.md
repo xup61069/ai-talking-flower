@@ -30,6 +30,16 @@ Volt 1 / 麥克風持續收音
 - **Kokoro 引擎**：約 10 秒（預設，極速首音 0.1 秒）
 - **CosyVoice3 引擎**：約 30 秒（擬真人聲、支援風格指令與音色複製）
 
+```powershell
+./run.cmd --pet   # 同時啟動桌面常駐小窗（透明置頂 + 系統匣 + 全域快捷鍵）
+```
+
+> 桌面小窗為可選功能，需額外安裝：`pip install "ai-talking-flower[pet]"`
+
+**全域快捷鍵**（小窗啟用時）：
+- 按住 `Ctrl+Alt+Space` 說話（push-to-talk，暫時解除靜音）
+- `Ctrl+Alt+M` 一鍵靜音/恢復聆聽
+
 ### 取得 AEC 回音消除 DLL（建議）
 
 `native/webrtc-apm.dll` 因授權因素不在 git 內。沒有它程式仍可執行，但回音消除會關閉（插話/自聽干擾風險）。執行一次：

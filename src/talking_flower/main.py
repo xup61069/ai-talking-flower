@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-web", action="store_true", help="不要啟動網頁控制台")
     parser.add_argument("--host", default="127.0.0.1", help="網頁控制台監聽位址")
     parser.add_argument("--port", type=int, default=7860, help="網頁控制台埠號")
+    parser.add_argument("--pet", action="store_true", help="同時啟動桌面常駐小窗（PySide6 + 系統匣 + 全域快捷鍵）")
     return parser
 
 
@@ -162,6 +163,10 @@ async def run(args: argparse.Namespace, config_path: Path) -> int:
         web_task = asyncio.create_task(server.serve(host=args.host, port=args.port))
         asyncio.create_task(_open_browser_after(args.host, args.port, 1.0))
 
+    # 桌面常駐小窗（獨立執行緒，不阻塞 asyncio 主迴圈）
+    if getattr(args, "pet", False) and args.text is None:
+        _start_pet_in_thread(bus, live)
+
     try:
         while True:
             controller, llm, memory = build_controller(
@@ -204,6 +209,24 @@ async def _open_browser_after(host: str, port: int, delay: float) -> None:
         webbrowser.open(f"http://{host}:{port}")
     except Exception:
         pass
+
+
+def _start_pet_in_thread(bus: StatusBus, live: LiveSettings) -> None:
+    import threading
+
+    def _run():
+        try:
+            from .desktop import run_pet
+
+            run_pet(bus, live)
+        except ImportError as error:
+            LOGGER.warning("桌面小窗未啟動（缺少依賴）：%s — 請 pip install \"ai-talking-flower[pet]\"", error)
+        except Exception:
+            LOGGER.exception("桌面小窗啟動失敗")
+
+    thread = threading.Thread(target=_run, name="flower-pet", daemon=True)
+    thread.start()
+    LOGGER.info("桌面小窗執行緒已啟動（--pet）")
 
 
 def main() -> None:
