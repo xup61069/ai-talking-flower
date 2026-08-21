@@ -41,15 +41,12 @@ class StatusBus:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._subscribers: set[asyncio.Queue[dict]] = set()
         self._history: deque[dict] = deque(maxlen=self.HISTORY)
+        self._lock = threading.Lock()
 
     def attach_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
 
-    def publish(self, event: dict) -> None:
-        self._history.append(event)
-        loop = self._loop
-        if loop is None:
-            return
+    def _deliver(self, event: dict) -> None:
         for queue in tuple(self._subscribers):
             try:
                 queue.put_nowait(event)
@@ -62,6 +59,19 @@ class StatusBus:
                     queue.put_nowait(event)
                 except asyncio.QueueFull:
                     pass
+
+    def publish(self, event: dict) -> None:
+        with self._lock:
+            self._history.append(event)
+        loop = self._loop
+        if loop is None:
+            return
+        # 執行緒安全：經 loop 投遞，避免 asyncio.Queue 跨執行緒 put_nowait 拋 RuntimeError
+        try:
+            loop.call_soon_threadsafe(self._deliver, event)
+        except RuntimeError:
+            # loop 已關閉
+            pass
 
     def history(self) -> list[dict]:
         return list(self._history)
@@ -89,4 +99,4 @@ class BusLogHandler(logging.Handler):
             message = self.format(record)
             self._bus.publish({"type": "log", "time": time.time(), "message": message})
         except Exception:
-            pass
+            self.handleError(record)

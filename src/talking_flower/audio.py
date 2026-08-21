@@ -141,6 +141,22 @@ class BlockResampler:
 
             self._soxr = soxr.ResampleStream(source_rate, target_rate, 1, dtype="float32", quality="HQ")
             self._mode = "soxr"
+            # 預建備援參數，避免 soxr 失敗後 boxcar 因未設 factor 而名不副實
+            try:
+                from math import gcd
+
+                from scipy.signal import resample_poly  # type: ignore
+
+                g = gcd(source_rate, target_rate)
+                self._up = target_rate // g
+                self._down = source_rate // g
+                self._resample_poly = resample_poly  # type: ignore
+                self._tail_len = 512
+                self._tail = np.zeros(0, dtype=np.float32)
+            except Exception:
+                pass
+            if source_rate % target_rate == 0:
+                self.factor = source_rate // target_rate
             return
         except Exception:
             pass
@@ -178,8 +194,8 @@ class BlockResampler:
                 out = self._soxr.resample_chunk(frame.astype(np.float32))
                 return out.astype(np.float32, copy=False)
             except Exception as e:
-                LOGGER.warning("soxr 重採樣失敗，降級到 scipy/boxcar：%s", e)
-                self._mode = "scipy_stateful" if hasattr(self, "_resample_poly") else "boxcar"
+                LOGGER.warning("soxr 重採樣失敗，降級到備援：%s", e)
+                self._mode = "scipy_stateful" if hasattr(self, "_resample_poly") else "interp"
         if getattr(self, "_mode", None) == "scipy_stateful":
             try:
                 # overlap-save 備援（soxr 為主，此路徑僅備援，不追 bit-exact）
