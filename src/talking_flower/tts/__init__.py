@@ -10,7 +10,8 @@ from ..config import AudioConfig, TtsConfig
 from ..settings import LiveSettings
 from .base import TextToSpeech, clean_speech_text
 from .http_pcm import HttpPcmTTS
-from .pcm_player import PcmPlayer, _PcmPlayer  # noqa: F401（別名供 tests）
+from .pcm_player import PcmPlayer  # noqa: F401
+from .pcm_player import _PcmPlayer  # noqa: F401（別名供 tests）
 from .sapi import WindowsSapiTTS
 
 __all__ = [

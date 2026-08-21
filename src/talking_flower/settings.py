@@ -6,7 +6,7 @@ import json
 import logging
 from pathlib import Path
 
-from .config import Config, config_from_raw, load_config
+from .config import Config, config_from_raw
 
 
 LOGGER = logging.getLogger(__name__)

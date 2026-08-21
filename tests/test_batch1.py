@@ -5,11 +5,10 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from talking_flower.commands import parse_absolute_time, VoiceCommander
+from talking_flower.commands import parse_absolute_time
 from talking_flower.metrics import MetricsStore
 from talking_flower.reminders import ReminderScheduler
 
@@ -64,7 +63,7 @@ class DailyRepeatReminderTests(unittest.TestCase):
         scheduler = None
         try:
             scheduler = ReminderScheduler(Path(temp.name) / "r.db")
-            reminder = scheduler.add(
+            scheduler.add(
                 "吃藥", in_seconds=0.1, repeat_daily_hhmm="09:00"
             )
             # 等待到期

@@ -28,7 +28,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           # 原始碼 + UI + 工具腳本（不含模型/原生 DLL/聲音樣本/資料）
           Copy-Item src, ui, tools, config.toml, pyproject.toml, README.md, LICENSE, CHANGELOG.md, run.cmd, run.ps1 -Destination $stage -Recurse -Force
-          Copy-Item native/THIRD-PARTY-NOTICES.txt -Destination "$stage/native/" -Force
           New-Item -ItemType Directory -Force -Path "$stage/native" | Out-Null
           if (Test-Path "native/THIRD-PARTY-NOTICES.txt") {
             Copy-Item "native/THIRD-PARTY-NOTICES.txt" -Destination "$stage/native/" -Force

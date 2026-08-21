@@ -8,11 +8,10 @@ import unittest
 from unittest import mock
 
 import httpx
-import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from talking_flower.bus import RestartRequired, RuntimeControl, StatusBus
+from talking_flower.bus import RestartRequired, RuntimeControl
 from talking_flower.config import load_config
 from talking_flower.controller import FlowerController
 from talking_flower.llm import LlamaCppClient

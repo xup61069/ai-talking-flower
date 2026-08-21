@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -13,10 +12,9 @@ from httpx import ASGITransport
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from talking_flower.bus import RuntimeControl, StatusBus
-from talking_flower.config import load_config
 from talking_flower.controller import FlowerController
 from talking_flower.memory import ConversationMemory
-from talking_flower.personas import get_persona_by_id, list_personas, PERSONA_PRESETS
+from talking_flower.personas import get_persona_by_id, list_personas
 from talking_flower.reminders import ReminderScheduler
 from talking_flower.settings import LiveSettings, SettingsStore
 from talking_flower.web import AppContext, WebServer
@@ -50,7 +48,7 @@ class RemindersTests(unittest.TestCase):
         try:
             db_path = Path(temp.name) / "test_reminders.db"
             scheduler = ReminderScheduler(db_path)
-            r1 = scheduler.add("喝水", in_seconds=0.0)
+            scheduler.add("喝水", in_seconds=0.0)
             r2 = scheduler.add("休息", in_seconds=3600)
 
             active = scheduler.list_active()

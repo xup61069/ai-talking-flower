@@ -193,7 +193,7 @@ class VoiceCommander:
         if re.search(r"^(現在幾點|現在時間|報時|幾點了|今天星期幾|今天幾號|現在日期)[？?！!。]*$", text):
             now = datetime.datetime.now()
             weekdays = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"]
-            time_desc = now.strftime(f"%H點%M分")
+            time_desc = now.strftime("%H點%M分")
             date_desc = now.strftime(f"%m月%d日 {weekdays[now.weekday()]}")
             if "星期" in text or "幾號" in text or "日期" in text:
                 reply = f"今天是{date_desc}，現在時間是{time_desc}喔！"
