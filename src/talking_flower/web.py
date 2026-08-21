@@ -258,6 +258,17 @@ class WebServer:
             ok = ctx.controller.reminders.delete(int(reminder_id))
             return {"ok": ok}
 
+        @app.get("/api/metrics/history")
+        async def metrics_history(limit: int = 50) -> dict:
+            metrics = getattr(ctx.controller, "metrics", None) if ctx.controller else None
+            if metrics is None:
+                return {"history": [], "summary": {}}
+            try:
+                limit = max(1, min(int(limit), 500))
+            except (TypeError, ValueError):
+                limit = 50
+            return {"history": metrics.recent(limit), "summary": metrics.summary(max(limit, 100))}
+
         @app.get("/api/memory")
         async def memory() -> dict:
             if ctx.memory is None:

@@ -48,6 +48,7 @@ class FlowerController:
         runtime: RuntimeControl | None = None,
         reminders: ReminderScheduler | None = None,
         store=None,
+        metrics=None,
     ) -> None:
         self.config = config
         self.asr = asr
@@ -59,6 +60,7 @@ class FlowerController:
         self.bus = bus
         self.runtime = runtime
         self.store = store
+        self.metrics = metrics
         self.reminders = (
             reminders
             if reminders is not None
@@ -412,6 +414,18 @@ class FlowerController:
                     "total_turn_ms": total_turn_ms,
                 }
             )
+        # 效能歷史：持久化供 sparkline 趨勢
+        if self.metrics is not None:
+            try:
+                self.metrics.add(
+                    asr_ms=getattr(self, "_last_asr_ms", 0.0),
+                    ttft_ms=ttft_ms,
+                    ttfa_ms=ttfa_ms,
+                    total_ms=total_turn_ms,
+                    source=source,
+                )
+            except Exception:
+                pass
 
         self._set_state(State.IDLE)
         self._last_activity = time.monotonic()

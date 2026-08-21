@@ -108,6 +108,79 @@ def _to_num(s: str) -> float:
     return 0.0
 
 
+def parse_absolute_time(text: str, *, now: datetime.datetime | None = None):
+    """將中文絕對時間（如「明天早上八點半」「每天晚上九點」「下午三點半」）解析為 (epoch, repeat_daily, hhmm)。
+
+    回傳 None 表示無法解析。支援：
+    - 相對日期詞：今天/明天/後天/每天/每日
+    - 時段：早上/上午/中午/下午/傍晚/晚上
+    - 「八點半」「八點三十分」19:30
+    """
+    now = now or datetime.datetime.now()
+    text = text.strip()
+
+    # 24 小時制數字
+    m_clock = re.search(r"(\d{1,2}):(\d{2})", text)
+    hh_mm: tuple[int, int] | None = None
+    if m_clock:
+        candidate = (int(m_clock.group(1)), int(m_clock.group(2)))
+        if 0 <= candidate[0] < 24 and 0 <= candidate[1] < 60:
+            hh_mm = candidate
+
+    # 中文「八點半 / 八點三十分 / 八點」
+    if hh_mm is None:
+        m_cn = re.search(rf"([{_CHINESE_NUM_CHARS}]+|\d+)\s*點(?:\s*(半|(\d+|[{_CHINESE_NUM_CHARS}]+))\s*分?)?", text)
+        if not m_cn:
+            return None
+        hour_val = _to_num(m_cn.group(1))
+        if hour_val <= 0 or hour_val >= 24:
+            return None
+        minute = 0
+        if m_cn.group(2):
+            if m_cn.group(2) == "半":
+                minute = 30
+            elif m_cn.group(3):
+                minute = int(_to_num(m_cn.group(3)))
+        hh_mm = (int(hour_val), minute)
+
+    # 日期詞
+    day_offset = 0
+    repeat_daily = False
+    if re.search(r"每\s*[天日]", text):
+        repeat_daily = True
+    elif "後天" in text:
+        day_offset = 2
+    elif "明天" in text:
+        day_offset = 1
+
+    # 時段偏移
+    period = ""
+    for p in ("凌晨", "清晨", "早上", "上午", "中午", "下午", "傍晚", "晚上", "夜晚"):
+        if p in text:
+            period = p
+            break
+
+    hh, mm = hh_mm
+    if period in ("下午", "傍晚", "晚上", "夜晚") and hh < 12:
+        hh += 12
+    elif period == "中午" and hh <= 2:
+        hh += 12
+    elif not period and hh < 8:
+        # 口語慣例：無時段的「三點」多指下午三點
+        hh += 12
+
+    target_date = (now + datetime.timedelta(days=day_offset)).date()
+    try:
+        target_dt = datetime.datetime.combine(target_date, datetime.time(hour=hh % 24, minute=mm))
+    except ValueError:
+        return None
+
+    if repeat_daily and target_dt <= now:
+        target_dt += datetime.timedelta(days=1)
+
+    return target_dt.timestamp(), repeat_daily, f"{hh % 24:02d}:{mm:02d}"
+
+
 class VoiceCommander:
     """即時語音指令識別器：秒級攔截時間查詢、定時提醒、性格切換、音量調整等明確指令。"""
 
@@ -128,7 +201,7 @@ class VoiceCommander:
                 reply = f"現在時間是{time_desc}喔！"
             return CommandResult(handled=True, reply=reply, action="time_query")
 
-        # 2. 定時提醒指令（如「5分鐘後提醒我喝水」、「半小時後叫我開會」、「一個半小時後提醒我」）
+        # 2. 定時提醒指令（相對時間：「5分鐘後提醒我喝水」）
         remind_match = re.search(
             r"^(?:幫我)?(?:設定|設)?(?:在)?((?:半|\d+個半|\d+|[一二兩三四五六七八九十]+個半|[一二兩三四五六七八九十半]+)\s*(?:小時|分鐘?|秒))\s*(?:之)?後\s*(?:提醒我|叫我|通知我)\s*(.+?)[。！!？?]*$",
             text,
@@ -148,6 +221,32 @@ class VoiceCommander:
                     action="add_reminder",
                     details={"text": task_part, "seconds": seconds},
                 )
+
+        # 2b. 絕對時間提醒（「明天早上八點半叫我起床」「每天晚上九點提醒我吃藥」）
+        absolute_match = re.search(
+            r"^(每\s*[天日]|今天|明天|後天)?\s*(早上|上午|中午|下午|傍晚|晚上|夜晚|凌晨|清晨)?\s*([0-9]{1,2}:[0-9]{2}|[一二兩三四五六七八九十半]+\s*點(?:半|\s*(?:[0-9]+|[一二兩三四五六七八九十]+)?\s*分?)?)\s*(?:的時候|左右)?\s*(?:提醒我|叫我|通知我)\s*(.+?)[。！!？?]*$",
+            text,
+        )
+        if absolute_match and controller.reminders:
+            parsed = parse_absolute_time(text)
+            if parsed is not None:
+                epoch, repeat_daily, hhmm = parsed
+                task_part = absolute_match.group(4).strip()
+                if task_part:
+                    reminder = controller.reminders.add_absolute(
+                        task_part, epoch,
+                        repeat_daily_hhmm=hhmm if repeat_daily else "",
+                    )
+                    if controller.bus is not None:
+                        controller.bus.publish({"type": "reminder_added", "reminder": reminder.to_dict()})
+                    prefix = "每天" if repeat_daily else "已排程"
+                    reply = f"好喔！{prefix}{hhmm.replace(':', '點')}分{'會' if repeat_daily else ''}提醒你：{task_part} ⏰"
+                    return CommandResult(
+                        handled=True,
+                        reply=reply,
+                        action="add_reminder",
+                        details={"text": task_part, "at": hhmm, "repeat": repeat_daily},
+                    )
 
         # 3. 性格切換指令
         persona_match = re.search(

@@ -54,6 +54,8 @@ def build_controller(
     runtime: RuntimeControl | None = None,
     store: SettingsStore | None = None,
 ) -> tuple[FlowerController, LlamaCppClient, ConversationMemory]:
+    from .metrics import MetricsStore
+
     llm = LlamaCppClient(config.llm)
     memory = ConversationMemory(config.app.database)
     aec = create_echo_canceller(
@@ -61,17 +63,19 @@ def build_controller(
         config.audio.sample_rate,
         config.project_root,
     )
+    metrics = MetricsStore(config.project_root / "data" / "metrics.db")
     controller = FlowerController(
         config=config,
         asr=create_recognizer(config.asr),
         llm=llm,
-        tts=create_tts(config.tts, config.audio, aec, live),
+        tts=create_tts(config.tts, config.audio, aec, live, bus),
         memory=memory,
         aec=aec,
         live=live,
         bus=bus,
         runtime=runtime,
         store=store,
+        metrics=metrics,
     )
     return controller, llm, memory
 

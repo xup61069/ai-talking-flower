@@ -5,6 +5,30 @@ let ws = null;
 let state = "等待說話";
 let currentFlowerMsgBubble = null;
 let currentThinkingRow = null;
+// 播放端真實音量（由 tts_rms 事件驅動）
+let lastTtsRms = 0;
+let ttsRmsTarget = 0;
+// TTFA 趨勢（HUD sparkline）
+const ttfaHistory = [];
+
+function drawSparkline() {
+  const canvas = $("hud-sparkline");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (ttfaHistory.length < 2) return;
+  const maxVal = Math.max(...ttfaHistory, 1);
+  ctx.beginPath();
+  ctx.strokeStyle = "#4ee49d";
+  ctx.lineWidth = 1.5;
+  ttfaHistory.forEach((v, i) => {
+    const x = (i / (ttfaHistory.length - 1)) * (canvas.width - 2) + 1;
+    const y = canvas.height - 2 - (v / maxVal) * (canvas.height - 4);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+}
 
 function esc(value) {
   return String(value)
@@ -200,6 +224,10 @@ function handleEvent(evt) {
       $("rms-bar").style.width = pct + "%";
       $("rms-text").textContent = `rms ${evt.rms.toFixed(4)} / 門檻 ${(evt.threshold || 0.008).toFixed(4)}`;
       break;
+    case "tts_rms":
+      ttsRmsTarget = evt.rms || 0;
+      lastTtsRms = Math.max(lastTtsRms, ttsRmsTarget);
+      break;
     case "user_text":
       appendMsg("user", evt.text);
       currentFlowerMsgBubble = null;
@@ -217,6 +245,9 @@ function handleEvent(evt) {
       $("hud-ttft").textContent = (evt.ttft_ms || 0) + "ms";
       $("hud-ttfa").textContent = (evt.ttfa_ms || 0) + "ms";
       $("hud-total").textContent = (evt.total_turn_ms || 0) + "ms";
+      ttfaHistory.push(evt.ttfa_ms || 0);
+      if (ttfaHistory.length > 40) ttfaHistory.shift();
+      drawSparkline();
       break;
     case "poke":
       triggerPokeAnimation();
@@ -612,7 +643,13 @@ function initWaveform() {
     const isListening = state === "正在聽";
     const isThinking = state === "思考中";
 
-    const amp = isSpeaking ? 11 : (isListening ? 6.5 : (isThinking ? 4 : 1.5));
+    // 真實 RMS 驅動：播放時用 tts_rms（衰減至 0），其他狀態退回固定幅度
+    if (isSpeaking) {
+      lastTtsRms *= 0.9; // 每幀自然衰減，避免訊號中斷時卡在高位
+      if (ttsRmsTarget > lastTtsRms) lastTtsRms = Math.min(ttsRmsTarget, lastTtsRms + (ttsRmsTarget - lastTtsRms) * 0.4);
+    }
+    const baseAmp = isSpeaking ? Math.max(2.5, lastTtsRms * 130) : (isListening ? 6.5 : (isThinking ? 4 : 1.5));
+    const amp = baseAmp;
     const freq = isSpeaking ? 0.08 : (isListening ? 0.055 : 0.035);
     const color = isSpeaking ? "#ff6ea3" : (isListening ? "#4ee49d" : (isThinking ? "#ffb84d" : "rgba(255,255,255,0.18)"));
 
@@ -632,6 +669,15 @@ function initWaveform() {
     ctx.stroke();
     ctx.shadowBlur = 0;
     wavePhase += isSpeaking ? 0.14 : (isListening ? 0.08 : 0.03);
+    // 嘴型對齊真實音量：scaleY 0.55..1.45
+    if (isSpeaking) {
+      const open = Math.min(1.45, 0.55 + lastTtsRms * 12);
+      const mouthEl = $("flower-mouth");
+      if (mouthEl) mouthEl.style.transform = `scaleY(${open.toFixed(3)}) scaleX(1.05)`;
+    } else {
+      const mouthEl = $("flower-mouth");
+      if (mouthEl && mouthEl.style.transform) mouthEl.style.transform = "";
+    }
   }
   renderWave();
 }

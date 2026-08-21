@@ -132,6 +132,7 @@ class _PcmPlayer:
         volume: int,
         aec: EchoCanceller,
         live: LiveSettings | None = None,
+        bus=None,
     ) -> None:
         self.source_rate = source_rate
         self.sample_rate = aec.sample_rate if aec.enabled else source_rate
@@ -139,6 +140,10 @@ class _PcmPlayer:
         self._volume = volume
         self.live = live
         self.aec = aec
+        self.bus = bus
+        # RMS 節流：每 3 個音框（60ms）發布一次，避免 bus 洪泛
+        self._rms_frame_stride = 3
+        self._rms_counter = 0
         self._queue: queue.Queue[bytes | None] = queue.Queue(maxsize=24)
         self._error: BaseException | None = None
         self._stop = threading.Event()
@@ -222,6 +227,15 @@ class _PcmPlayer:
                             reference = np.frombuffer(audio_frame, dtype="<i2").astype(np.float32)
                             self.aec.process_render(reference / 32768.0)
                         stream.write(audio_frame)
+                        # 真實播放音量回傳（R4-2 已使 publish 執行緒安全）
+                        self._rms_counter += 1
+                        if self.bus is not None and self._rms_counter % self._rms_frame_stride == 0:
+                            try:
+                                samples_f = np.frombuffer(audio_frame, dtype="<i2").astype(np.float32) / 32768.0
+                                rms = float(np.sqrt(np.mean(np.square(samples_f))))
+                                self.bus.publish({"type": "tts_rms", "rms": round(rms, 4)})
+                            except Exception:
+                                pass
                         if dump_frames is not None:
                             dump_frames.append(audio_frame)
                 if pending and not self._stop.is_set():
@@ -343,10 +357,12 @@ class HttpPcmTTS:
         audio: AudioConfig,
         aec: EchoCanceller,
         live: LiveSettings | None = None,
+        bus=None,
     ) -> None:
         self.config = config
         self.aec = aec
         self.live = live
+        self.bus = bus
         self._converter = OpenCC("t2s") if config.backend == "kokoro" else None
         self._client = httpx.AsyncClient(
             base_url=config.base_url.rstrip("/"),
@@ -431,6 +447,7 @@ class HttpPcmTTS:
                         self.config.volume,
                         self.aec,
                         self.live,
+                        self.bus,
                     )
                     if self._in_turn:
                         self._turn_player = player
@@ -495,9 +512,10 @@ def create_tts(
     audio: AudioConfig,
     aec: EchoCanceller | None = None,
     live: LiveSettings | None = None,
+    bus=None,
 ) -> TextToSpeech:
     if config.backend == "windows_sapi":
         return WindowsSapiTTS(config)
     if config.backend in {"cosyvoice", "kokoro"}:
-        return HttpPcmTTS(config, audio, aec or BypassEchoCanceller(audio.sample_rate), live)
+        return HttpPcmTTS(config, audio, aec or BypassEchoCanceller(audio.sample_rate), live, bus)
     raise ValueError(f"不支援的 TTS backend：{config.backend}")
